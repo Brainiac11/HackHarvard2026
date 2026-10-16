@@ -167,7 +167,8 @@ class Hub:
             return
         snap_alerts = [(e.id, e.meaning) for e in self.engine.recent
                        if e.layer == "alert" and self.engine.t - e.t <= 4.0]
-        label = self.coach.check(now, self.engine.last_output.dominant, snap_alerts, self.mission.active_equipment)
+        in_use = self.mission.active_equipment if self.engine.state.mode == self.mission.active_equipment else None
+        label = self.coach.check(now, self.engine.last_output.dominant, snap_alerts, in_use)
         if label and (self._assistant_task is None or self._assistant_task.done()):
             self._assistant_task = asyncio.get_running_loop().create_task(self.ask_assistant("", label))
 
@@ -287,10 +288,8 @@ class Hub:
         profile = self.store.get(profile_id) if profile_id else (self.mission.profile or self.store.profiles[0])
         if profile is None:
             return Outcome(ok=False, toasts=[("error", f"no profile '{profile_id}'")])
-        uid = profile.uids[0] if profile.uids else f"SIM{profile.id.upper()}"
-        if not profile.uids:
-            self.store.enroll(uid, profile.id)
-        return self.mission.on_scan(uid)
+        self.mission.last_uid = "keyboard"
+        return self.mission.identify(profile)
 
     async def handle_sim_message(self, ws: WebSocket, raw: str) -> None:
         try:

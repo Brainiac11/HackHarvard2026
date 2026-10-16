@@ -29,6 +29,8 @@ RUBRIC: dict[str, Situation] = {s.id: s for s in [
     Situation("no_profile", "nominal", ("tap",), "Tap your glove on the reader so the system knows who you are."),
     Situation("not_authorized", "nominal", ("tap",), "Tap your glove on the reader at this equipment to authorize it."),
     Situation("walk", "nominal", ("approach", "walk", "tap"), "Walk to the drill rack or the rover and tap your glove."),
+    Situation("equipment_ready", "nominal", ("pick up", "board", "grab", "grip", "climb in", "enter"),
+              "Your glove is authorized here: pick up the drill or board the rover to begin."),
     Situation("drill_idle", "nominal", ("squeeze", "trigger", "aim"), "Aim at a sample and squeeze the trigger."),
     Situation("drill_free_spin", "nominal", ("aim", "contact", "move", "closer"),
               "Bring the spinning bit into contact with the sample."),

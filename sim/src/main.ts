@@ -60,7 +60,7 @@ async function main(): Promise<void> {
 
   // where the drill sits when held without hand tracking: lower-right of view
   const handAnchor = new THREE.Object3D();
-  handAnchor.position.set(0.22, -0.2, -0.42);
+  handAnchor.position.set(0.3, -0.3, -0.62);
   camera.add(handAnchor);
 
   // ------------------------------------------------------------------ hub + HUD

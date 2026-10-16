@@ -68,6 +68,8 @@ def _situation(ctx: ContextPacket) -> str:
     if ctx.mode == "walk" or ctx.active_equipment is None:
         if ctx.near and ctx.near not in ctx.authorized:
             return "not_authorized"
+        if ctx.near:
+            return "equipment_ready"
         return "walk"
     if ctx.mode == "drill":
         d = ctx.drill

@@ -44,6 +44,7 @@ IMPACT_L = {"meaning": "event.impact_left", "layer": "event", "cause": "wheel im
 CASES = [
     ("no_profile", ContextPacket(), "none", "nominal"),
     ("not_authorized", ctx(near="rover", authorized=[]), "none", "nominal"),
+    ("equipment_ready", ctx(near="drill", authorized=["drill"]), "none", "nominal"),
     ("drill_soft", drill_ctx(0.25), "soft_material_hum", "nominal"),
     ("drill_hard", drill_ctx(0.9), "hard_material_grinding", "caution"),
     ("drill_stall", drill_ctx(0.9, stalled=True, recent=[STALL]), "drill_stall_warning", "warning"),

@@ -116,7 +116,7 @@ export class DrillSystem {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(N * 3).fill(-9999), 3));
     geo.setAttribute("color", new THREE.BufferAttribute(new Float32Array(N * 3), 3));
-    this.dust = new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.025, vertexColors: true }));
+    this.dust = new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.012, vertexColors: true }));
     this.dust.frustumCulled = false;
     this.dustVel = new Float32Array(N * 3);
     this.dustLife = new Float32Array(N);

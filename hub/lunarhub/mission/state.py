@@ -53,6 +53,10 @@ class MissionState:
                            toasts=[("warn", f"Unknown glove {uid[:8]}… — press Enroll to assign it")],
                            patterns=[(patterns.denied(), f"unrecognised glove UID {uid}")])
         self.unknown_uid = None
+        return self.identify(profile)
+
+    def identify(self, profile: Profile) -> Outcome:
+        """Log an astronaut in (from a real scan or the keyboard fallback) and authorize nearby equipment."""
         out = Outcome(welcome=True)
         if profile.id != self.profile_id:
             self.profile_id = profile.id
