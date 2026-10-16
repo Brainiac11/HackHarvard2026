@@ -1,0 +1,89 @@
+{
+  "site": "Site04",
+  "site_name": "Shackleton rim",
+  "grid": 1025,
+  "spacing_m": 1.245117,
+  "extent_m": 1275.0,
+  "elev_offset_m": 1186.479,
+  "height_range_m": 103.725,
+  "slope_range_deg": [
+    0.04,
+    35.39
+  ],
+  "coverage_fraction": 0.1058,
+  "row_order": "north-to-south rows as in the source raster (row 0 = top of the GeoTIFF)",
+  "corners": {
+    "nw": {
+      "x_m": -4837.5,
+      "y_m": -12922.5,
+      "lat": -89.544964,
+      "lon": 200.52324
+    },
+    "ne": {
+      "x_m": -3562.5,
+      "y_m": -12922.5,
+      "lat": -89.557948,
+      "lon": 195.412571
+    },
+    "sw": {
+      "x_m": -4837.5,
+      "y_m": -14197.5,
+      "lat": -89.505367,
+      "lon": 198.815465
+    },
+    "se": {
+      "x_m": -3562.5,
+      "y_m": -14197.5,
+      "lat": -89.517285,
+      "lon": 194.086084
+    },
+    "center": {
+      "x_m": -4200.0,
+      "y_m": -13560.0,
+      "lat": -89.531863,
+      "lon": 197.209558
+    }
+  },
+  "src": {
+    "window_px": [
+      832,
+      2784,
+      256
+    ],
+    "resolution_m": 5.0,
+    "raster_px": [
+      3200,
+      3200
+    ],
+    "crs": "+proj=stere +lat_0=-90 +lat_ts=-90 +lon_0=0 +x_0=0 +y_0=0 +R=1737400 +units=m +no_defs +type=crs",
+    "window_stats": {
+      "median_slope": 6.480485916137695,
+      "steep_frac": 0.008880615234375,
+      "warn_frac": 0.0705108642578125,
+      "coverage": 0.1058197021484375,
+      "slope_std": 4.8797993659973145,
+      "relief_m": 103.6519775390625,
+      "relaxation": 1.0,
+      "candidates_considered": 8649
+    },
+    "overview_box_uv": [
+      0.26,
+      0.87,
+      0.34,
+      0.95
+    ],
+    "files": [
+      "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/Site04/Site04_final_adj_5mpp_surf.tif",
+      "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/Site04/Site04_final_adj_5mpp_slp.tif",
+      "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/Site04/Site04_final_adj_5mpp_slperr.tif",
+      "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/Site04/Site04_final_adj_5mpp_ldec.tif"
+    ]
+  },
+  "provenance": {
+    "dataset": "NASA GSFC PGDA \u2014 High-Resolution LOLA Topography for Lunar South Pole Sites (5 m/px)",
+    "product_page": "https://pgda.gsfc.nasa.gov/products/78",
+    "citation": "Barker, M. K., et al. (2021). Improved LOLA elevation maps for south pole landing sites: Error estimates and their impact on illumination conditions. Planetary & Space Science, 203, 105119. doi:10.1016/j.pss.2020.105119",
+    "notes": "Heights are LOLA-derived and interpolated where cover=0. Fine-scale detail added in the simulator is synthetic and labelled as such."
+  },
+  "built_at": "2026-10-16T21:58:55+00:00"
+}

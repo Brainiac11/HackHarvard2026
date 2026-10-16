@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "id": "rivera",
+      "name": "Cmdr. Ana Rivera",
+      "callsign": "HAWK",
+      "uids": [
+        "SIMRIVERA"
+      ],
+      "auth_pattern": "double",
+      "global": {
+        "gain": 1.0,
+        "motor_gain": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "warning_gain": 1.0
+      },
+      "hand_calibration": null,
+      "equipment": {
+        "drill": {
+          "sensitivity": 1.3,
+          "mapping": "resistance"
+        },
+        "rover": {
+          "vibration": 0.6,
+          "terrain_sensitivity": 1.0,
+          "mapping": "split",
+          "slope_warn_deg": 15.0
+        }
+      },
+      "input": {
+        "preferred": [
+          "gesture",
+          "voice"
+        ]
+      },
+      "patch": {
+        "motif": "a hawk carrying a core drill",
+        "colors": "navy, gold, regolith grey",
+        "file": "patches/rivera.png"
+      }
+    },
+    {
+      "id": "okafor",
+      "name": "Spc. Daniel Okafor",
+      "callsign": "ATLAS",
+      "uids": [],
+      "auth_pattern": "wave",
+      "global": {
+        "gain": 0.8,
+        "motor_gain": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "warning_gain": 1.2
+      },
+      "hand_calibration": null,
+      "equipment": {
+        "drill": {
+          "sensitivity": 0.8,
+          "mapping": "localized"
+        },
+        "rover": {
+          "vibration": 1.0,
+          "terrain_sensitivity": 1.5,
+          "mapping": "uniform",
+          "slope_warn_deg": 12.0
+        }
+      },
+      "input": {
+        "preferred": [
+          "voice",
+          "keyboard"
+        ]
+      },
+      "patch": {
+        "motif": "Atlas holding a lunar rover aloft",
+        "colors": "crimson, silver, black",
+        "file": "patches/okafor.png"
+      }
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Node
+node_modules/
+sim/dist/
+
+# Secrets
+.env
+
+# Raw NASA downloads (processed outputs in sim/public/terrain are committed)
+terrain/raw/
+
+# Firmware build
+firmware/glove/.pio/
+
+# Session logs
+data/sessions/*.jsonl
+
+# Editors
+.vscode/
+.cursor/
+.DS_Store

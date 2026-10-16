@@ -1,0 +1,142 @@
+{
+  "drill.free_spin": {
+    "id": "drill.free_spin",
+    "sensation": "light, fast hum",
+    "signal": "drill running but not touching material",
+    "feeling": "drill_free_spin",
+    "layer": "base"
+  },
+  "drill.soft": {
+    "id": "drill.soft",
+    "sensation": "gentle, steady hum",
+    "signal": "bit cutting soft regolith easily",
+    "feeling": "soft_material_hum",
+    "layer": "base"
+  },
+  "drill.hard": {
+    "id": "drill.hard",
+    "sensation": "strong, gritty, irregular bursts",
+    "signal": "bit grinding hard basalt against high resistance",
+    "feeling": "hard_material_grinding",
+    "layer": "base"
+  },
+  "alert.drill_stall": {
+    "id": "alert.drill_stall",
+    "sensation": "three strong beats on all fingers",
+    "signal": "the drill bit has stopped advancing",
+    "feeling": "drill_stall_warning",
+    "layer": "alert"
+  },
+  "event.breakthrough": {
+    "id": "event.breakthrough",
+    "sensation": "one fading pulse",
+    "signal": "the bit punched through the sample",
+    "feeling": "drill_breakthrough",
+    "layer": "event"
+  },
+  "rover.speed": {
+    "id": "rover.speed",
+    "sensation": "rumble that rises and quickens with speed",
+    "signal": "rover speed",
+    "feeling": "rover_speed_rumble",
+    "layer": "base"
+  },
+  "rover.terrain_left": {
+    "id": "rover.terrain_left",
+    "sensation": "random taps on the thumb side",
+    "signal": "left wheels crossing bumps",
+    "feeling": "rough_terrain_left",
+    "layer": "base"
+  },
+  "rover.terrain_right": {
+    "id": "rover.terrain_right",
+    "sensation": "random taps on the pinky side",
+    "signal": "right wheels crossing bumps",
+    "feeling": "rough_terrain_right",
+    "layer": "base"
+  },
+  "rover.terrain": {
+    "id": "rover.terrain",
+    "sensation": "random taps across the hand",
+    "signal": "wheels crossing rough ground",
+    "feeling": "rough_terrain_both",
+    "layer": "base"
+  },
+  "event.impact_left": {
+    "id": "event.impact_left",
+    "sensation": "sharp hit on the thumb side",
+    "signal": "a left wheel struck a rock or crater edge",
+    "feeling": "wheel_impact",
+    "layer": "event"
+  },
+  "event.impact_right": {
+    "id": "event.impact_right",
+    "sensation": "sharp hit on the pinky side",
+    "signal": "a right wheel struck a rock or crater edge",
+    "feeling": "wheel_impact",
+    "layer": "event"
+  },
+  "alert.slope": {
+    "id": "alert.slope",
+    "sensation": "three strong beats on all fingers while driving",
+    "signal": "measured LOLA slope under the rover exceeds your personal limit",
+    "feeling": "slope_warning",
+    "layer": "alert"
+  },
+  "ui.auth": {
+    "id": "ui.auth",
+    "sensation": "short double/triple pulse or finger wave",
+    "signal": "glove identity accepted",
+    "feeling": "auth_confirmation",
+    "layer": "event"
+  },
+  "ui.equipment_drill": {
+    "id": "ui.equipment_drill",
+    "sensation": "index and middle finger pulse",
+    "signal": "drill profile is active",
+    "feeling": "auth_confirmation",
+    "layer": "event"
+  },
+  "ui.equipment_rover": {
+    "id": "ui.equipment_rover",
+    "sensation": "left-to-right sweep",
+    "signal": "rover profile is active",
+    "feeling": "auth_confirmation",
+    "layer": "event"
+  },
+  "ui.confirm": {
+    "id": "ui.confirm",
+    "sensation": "single short middle-finger tap",
+    "signal": "command accepted",
+    "feeling": "setting_change",
+    "layer": "event"
+  },
+  "ui.setting_up": {
+    "id": "ui.setting_up",
+    "sensation": "ripple from thumb to pinky",
+    "signal": "a feedback setting was increased",
+    "feeling": "setting_change",
+    "layer": "event"
+  },
+  "ui.setting_down": {
+    "id": "ui.setting_down",
+    "sensation": "ripple from pinky to thumb",
+    "signal": "a feedback setting was decreased",
+    "feeling": "setting_change",
+    "layer": "event"
+  },
+  "ui.denied": {
+    "id": "ui.denied",
+    "sensation": "long low buzz",
+    "signal": "not authorised, or the glove was not recognised",
+    "feeling": "access_denied",
+    "layer": "event"
+  },
+  "ui.test": {
+    "id": "ui.test",
+    "sensation": "demonstration pattern",
+    "signal": "haptic test requested",
+    "feeling": "none",
+    "layer": "event"
+  }
+}

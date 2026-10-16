@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <circle cx="100" cy="100" r="96" fill="hsl(336,45%,22%)" stroke="hsl(16,70%,60%)" stroke-width="8"/>
+  <circle cx="100" cy="120" r="46" fill="#bdb8ad"/>
+  <circle cx="148" cy="58" r="14" fill="#4a8fd8"/>
+  <text x="100" y="78" font-family="sans-serif" font-size="34" font-weight="700" text-anchor="middle"
+        fill="#f4efe6">AR</text>
+</svg>
