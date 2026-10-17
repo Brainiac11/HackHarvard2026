@@ -110,7 +110,7 @@ def derive(ctx: ContextPacket) -> Derived:
     if situation == "rover_slope_alert":
         requires_uncertainty = t.measured is False or (t.lola_slope_err_deg or 0) > UNCERTAIN_SLOPE_ERR_DEG
     elif situation == "rover_slope_ahead":
-        requires_uncertainty = t.lookahead_all_measured is False or (
+        requires_uncertainty = t.lookahead_max_measured is False or (
             t.lookahead_max_slope_err_deg or 0) > UNCERTAIN_SLOPE_ERR_DEG
     lv = ctx.haptics.levels
     left, right = lv.get("rover.terrain_left", 0.0), lv.get("rover.terrain_right", 0.0)

@@ -97,3 +97,17 @@ canvas { display: block; }
 .help { top: 50%; left: 50%; transform: translate(-50%, -50%); width: 640px; }
 .help h3 { margin: 0 0 6px; }
 .help div { margin: 3px 0; }
+
+.voice { right: 14px; bottom: 14px; width: 330px; pointer-events: auto; }
+.vstatus { font-weight: 700; font-size: 12px; letter-spacing: 1px; color: var(--muted); }
+.vstatus.listening { color: var(--bad); }
+.vstatus.thinking { color: var(--info); }
+.vstatus.speaking { color: var(--ok); }
+.vstatus.ready { color: var(--ink); }
+.vlog { margin-top: 4px; max-height: 150px; overflow: hidden; font-size: 13px; }
+.vline { margin-top: 3px; }
+.vline.tool { color: var(--muted); font-size: 11px; font-family: ui-monospace, monospace; }
+.vline.assistant b { color: var(--ok); }
+.vline.user b { color: var(--accent); }
+.vinput { margin-top: 6px; width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--accent);
+  background: #0c0d10; color: var(--ink); font: inherit; }

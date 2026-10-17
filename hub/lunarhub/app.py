@@ -32,6 +32,7 @@ from .nfc.service import NfcService
 from .profiles.store import ProfileStore, SettingError
 from .protocol.messages import SimEvent, SimState, UiAction, VoiceToolCall
 from .terrain import TerrainGrid
+from .voice import local_intents
 from .voice.session import session_config
 from .voice.token import VoiceTokenError, mint_token
 
@@ -52,7 +53,7 @@ class Settings:
     nfc: str = "auto"
     terrain_site: str = "site04"
     assistant: str = "local"  # local | chalk
-    variant: str = "v2"
+    variant: str = "v2+guard"
     xai_api_key: str = ""
     imagine_model: str = "grok-imagine-image"
     voice_model: str = "grok-voice-latest"
@@ -362,6 +363,16 @@ class Hub:
                 self.engine.play(factory(), "UI test")
         elif a.action == "stop":
             self.engine.stop_all()
+        elif a.action == "local_command":  # Grok offline: typed command -> same tools, spoken by the browser
+            text = str(args.get("text", ""))[:300]
+            intents = local_intents.parse(text)
+            if not intents:
+                await self.broadcast({"t": "voice.local_reply", "text": "Sorry, I can't do that offline."})
+                return
+            tool, tool_args = intents[0]
+            output = await self.commands.execute(tool, tool_args)
+            await self.broadcast({"t": "voice.local_reply", "tool": tool, "output": output,
+                                  "text": local_intents.summarize(tool, output)})
         else:
             log.warning("unknown ui.action %s", a.action)
 

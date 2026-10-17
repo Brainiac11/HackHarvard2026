@@ -31,7 +31,7 @@ def rover_ctx(speed=2.0, rough=0.1, slope=5.0, measured=True, err=0.6, ahead=6.0
                rover={"speed_mps": speed, "rough": rough, "heading_deg": 90},
                terrain={"lola_slope_deg": slope, "lola_slope_err_deg": err, "measured": measured,
                         "lookahead_max_slope_deg": ahead, "lookahead_max_slope_err_deg": err, "lookahead_at_m": 35,
-                        "lookahead_all_measured": ahead_measured, "lat": -89.53, "lon": 197.2, "elev_m": 1874},
+                        "lookahead_max_measured": ahead_measured, "lat": -89.53, "lon": 197.2, "elev_m": 1874},
                haptics={"dominant": dominant, "recent": list(recent),
                         "levels": levels or ({dominant: 0.3} if dominant else {})})
 

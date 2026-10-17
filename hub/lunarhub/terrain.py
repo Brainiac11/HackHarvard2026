@@ -22,7 +22,7 @@ class Lookahead:
     max_slope_deg: float
     max_slope_err_deg: float
     at_distance_m: float  # where the max slope occurs
-    min_cover: int  # 0 = some sampled cell along the path is interpolated (no laser return)
+    max_cover: int  # LOLA returns in the steepest cell (0 = that slope is interpolated, not measured)
 
 
 class TerrainGrid:
@@ -92,21 +92,19 @@ class TerrainGrid:
                   step_m: float = 5.0) -> Lookahead:
         h = math.radians(heading_deg)
         dx, dz = math.sin(h), -math.cos(h)
-        best = (-1.0, 0.0, 0.0)
-        min_cover = 255
+        best = (-1.0, 0.0, 0.0, 0)
         d = step_m
         while d <= distance_m + 1e-6:
             px, pz = x + dx * d, z + dz * d
             if not self.inside(px, pz):
                 break
             s = self.sample(px, pz)
-            min_cover = min(min_cover, s["coverage"])
             if s["lola_slope_deg"] > best[0]:
-                best = (s["lola_slope_deg"], s["lola_slope_err_deg"], d)
+                best = (s["lola_slope_deg"], s["lola_slope_err_deg"], d, s["coverage"])
             d += step_m
         if best[0] < 0:
             return Lookahead(distance_m, 0.0, 0.0, 0.0, 0)
-        return Lookahead(distance_m, round(best[0], 1), round(best[1], 1), best[2], min_cover)
+        return Lookahead(distance_m, round(best[0], 1), round(best[1], 1), best[2], best[3])
 
     def provenance(self) -> dict:
         return {

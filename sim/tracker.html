@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>LunarHaptics Tracker</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7' fill='%23c9c3b6'/%3E%3C/svg%3E" />
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; color: #eee; font: 15px system-ui, -apple-system, sans-serif; overflow: hidden; }
+      #stage { position: fixed; inset: 0; display: grid; place-items: center; }
+      video, canvas { position: absolute; max-width: 100%; max-height: 100%; }
+      video { opacity: 0.55; }
+      #bar { position: fixed; top: env(safe-area-inset-top, 0); left: 0; right: 0; display: flex; gap: 10px; align-items: center;
+        padding: 8px 12px; background: rgba(0,0,0,0.6); font-size: 13px; flex-wrap: wrap; }
+      #bar b { color: #f0a83a; }
+      .dot { width: 10px; height: 10px; border-radius: 50%; background: #ff5a4f; display: inline-block; margin-right: 4px; }
+      .dot.on { background: #5fd08a; }
+      button { font: inherit; padding: 10px 18px; border-radius: 10px; border: 1px solid #f0a83a; background: #1c1a16; color: #eee; }
+      #start { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 20px; padding: 18px 30px; }
+      #tools { margin-left: auto; display: flex; gap: 6px; }
+      #tools button { padding: 6px 10px; }
+      #msg { position: fixed; bottom: 16px; left: 0; right: 0; text-align: center; color: #f0a83a; }
+    </style>
+  </head>
+  <body>
+    <div id="stage"><video id="video" playsinline muted autoplay></video><canvas id="overlay"></canvas></div>
+    <div id="bar">
+      <span><span id="ws" class="dot"></span>hub</span>
+      <span>fps <b id="fps">–</b></span>
+      <span>rtt <b id="rtt">–</b></span>
+      <span>delegate <b id="delegate">–</b></span>
+      <span>hand <b id="hand">–</b></span>
+      <div id="tools"><button id="rotate">Rotate 0°</button><button id="cap">24 fps</button></div>
+    </div>
+    <button id="start">Start hand tracking</button>
+    <div id="msg"></div>
+    <script type="module" src="/src/tracker/main.ts"></script>
+  </body>
+</html>

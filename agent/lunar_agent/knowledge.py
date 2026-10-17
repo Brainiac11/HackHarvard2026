@@ -50,7 +50,7 @@ RUBRIC: dict[str, Situation] = {s.id: s for s in [
     Situation("rover_slope_ahead", "caution", ("turn", "heading", "steer", "avoid", "around", "change"),
               "Change heading before reaching the steeper ground ahead."),
     Situation("rover_slope_alert", "warning", ("stop", "slow", "across", "traverse", "turn", "back"),
-              "Slow or stop, then turn to traverse across the slope instead of climbing straight up it."),
+              "Slow or stop, then turn to traverse across the slope rather than climbing it head-on."),
 ]}
 
 UNCERTAINTY_TERMS = ("interpolated", "estimated", "not directly measured", "uncertain", "no laser")

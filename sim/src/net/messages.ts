@@ -66,4 +66,7 @@ export interface HubAssistant {
 export interface HandFrame { t: "hand.frame"; ts: number; hand: string; score: number; lm: number[][]; wlm: number[][]; fps: number }
 export interface VoiceToolResult { t: "voice.tool_result"; call_id: string; output: Record<string, unknown> }
 
-export type HubMessage = HubState | HubMotors | HubToast | HubWelcome | HubPatch | HubAssistant | HandFrame | VoiceToolResult;
+export interface VoiceLocalReply { t: "voice.local_reply"; text: string; tool?: string; output?: Record<string, unknown> }
+
+export type HubMessage = HubState | HubMotors | HubToast | HubWelcome | HubPatch | HubAssistant | HandFrame | VoiceToolResult
+  | VoiceLocalReply;

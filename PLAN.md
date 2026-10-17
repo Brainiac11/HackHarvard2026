@@ -12,6 +12,39 @@ Research snapshot: 2026-10-16 (Friday, hacking day 1).
 - **Grok Imagine mission patches** are now core scope (§10A).
 - **Chalk Mission Assistant agent** added: it explains what the astronaut is feeling and what to do (§10B). This targets the Chalk sponsor prize as well.
 
+## Build status (live)
+
+Updated 2026-10-16, Fri ~6:45 PM. Everything below is implemented and tested without hardware. Items marked ⏳ need
+hardware, keys or accounts.
+
+| Area | Status | Where |
+|---|---|---|
+| Terrain pipeline (Site04 Shackleton rim, auto-picked drivable crop: 104 m relief, 7% > 15°) | ✅ | `terrain/build.py`, `sim/public/terrain/site04/` |
+| Glove protocol (Python + C++), cross-language contract test | ✅ 7/7 vectors | `hub/lunarhub/protocol/glove.py`, `firmware/glove/src/protocol.h` |
+| Haptic engine, patterns, drill + rover mappers, vocabulary | ✅ tested | `hub/lunarhub/haptics/` |
+| Profiles, mission state/NFC flow, command handler (8 voice tools), offline intents | ✅ tested | `hub/lunarhub/{profiles,mission,commands,voice}` |
+| Hub app (WS/REST, 100 Hz loop, auto-coach), glove transports (null/serial/BLE) | ✅ integration-tested (null glove) · ⏳ real glove | `hub/lunarhub/app.py`, `glove/transport.py` |
+| NFC backends (PC/SC, HID wedge, serial, keyboard N) | ✅ code · ⏳ real reader | `hub/lunarhub/nfc/service.py` |
+| ESP32 firmware (BLE + serial, watchdog, kick, patterns) | ✅ compiles (esp32dev) · ⏳ flash | `firmware/glove/` |
+| Simulator: LOLA terrain + synthetic detail toggle, drill, rover physics, HUD, provenance | ✅ e2e-tested headless | `sim/src/` |
+| Phone tracker (MediaPipe, iOS fallbacks) + virtual hand + gestures + calibration | ✅ code + unit tests · ⏳ iPhone test | `sim/tracker.html`, `sim/src/hand/` |
+| Grok Voice client (PTT, tools via hub, force_message) | ✅ code · ⏳ XAI key | `sim/src/voice/` |
+| Grok Imagine patches (+ SVG fallback) | ✅ tested with mocks · ⏳ XAI key | `hub/lunarhub/imagine/patches.py` |
+| Mission Assistant core (rules, prompts, validate→repair→guard) | ✅ tested with fake model | `agent/lunar_agent/` |
+| Chalk Function + deploy/smoke | ✅ code · ⏳ Chalk login + gateway key | `agent/lunar_agent/{agent,deploy,smoke}.py` |
+| Eval harness: 320 synthetic + 20 adversarial rows, scorers, local + Chalk runners, EVALS.md | ✅ baseline run · ⏳ LLM runs | `agent/lunar_agent/evals/` |
+| Human labels: 30 questions drafted, blank for the user | ⏳ **user to answer** | `docs/LABEL_QUESTIONS.md` |
+| Bring-up tools (haptic_cli, ABX test, fake NFC, dev.sh, hotspot) | ✅ | `scripts/` |
+
+**Native iOS tracker option (xtool installed).** If Safari tracking disappoints (certificate trouble, low FPS,
+thermals), build a native SwiftPM app with xtool. It would use Apple Vision's `VNDetectHumanHandPoseRequest` (21
+joints, Neural Engine) and send the same `hand.frame` JSON over `ws://` (`NSAllowsLocalNetworking`). The rest of the
+pipeline is unchanged. Decide after the Phase 4 iPhone FPS test.
+
+**Eval caveat.** `baseline-rules` is also the labeller for the synthetic and adversarial sets, so it scores 100% there
+by construction. Report LLM variants against it, and treat the human-labelled questions and the LLM judges as the
+independent evidence.
+
 ---
 
 ## 0. Ground truth and hard constraints

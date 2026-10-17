@@ -28,7 +28,7 @@ def main() -> None:
     ap.add_argument("--nfc", default=os.getenv("NFC_BACKEND", "auto"),
                     help="auto | pcsc | hid[:/dev/input/by-id/...] | serial:<port> | none")
     ap.add_argument("--assistant", default=os.getenv("ASSISTANT_BACKEND", "local"), choices=["local", "chalk"])
-    ap.add_argument("--variant", default=os.getenv("ASSISTANT_VARIANT", "v2"))
+    ap.add_argument("--variant", default=os.getenv("ASSISTANT_VARIANT", "v2+guard"))
     ap.add_argument("--terrain", default="site04")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8000)

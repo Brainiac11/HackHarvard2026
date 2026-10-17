@@ -156,7 +156,7 @@ class CommandHandler:
             "here": {"lola_slope_deg": here["lola_slope_deg"], "lola_slope_err_deg": here["lola_slope_err_deg"],
                      "measured": here["coverage"] > 0},
             "ahead_50m": {"max_slope_deg": ahead.max_slope_deg, "max_slope_err_deg": ahead.max_slope_err_deg,
-                          "at_distance_m": ahead.at_distance_m, "all_measured": ahead.min_cover > 0},
+                          "at_distance_m": ahead.at_distance_m, "steepest_measured": ahead.max_cover > 0},
             "slope_limit_deg": limit,
             "roughness_index": round(st.rover.rough, 2),
             "roughness_source": "simulated fine-scale detail" if st.terrain.synthetic_detail else "LOLA only",

@@ -41,6 +41,10 @@ export class Hud {
   private minimapDot: HTMLDivElement;
   private provText: HTMLDivElement;
   private speedo = el("div", "panel speedo hidden", this.root);
+  private voice = el("div", "panel voice", this.root);
+  private voiceStatus: HTMLDivElement;
+  private voiceLog: HTMLDivElement;
+  readonly voiceInput: HTMLInputElement;
 
   constructor(overviewUrl: string) {
     this.card.innerHTML = `<div class="who">No astronaut identified</div><div class="sub">Tap your glove on the reader (or press N)</div>`;
@@ -58,15 +62,32 @@ export class Hud {
     box.dataset.role = "box";
     this.minimapDot = el("div", "dot", box);
     this.provText = el("div", "provtext", this.prov);
+    this.voiceStatus = el("div", "vstatus", this.voice, "CAPCOM · offline (hold V to talk)");
+    this.voiceLog = el("div", "vlog", this.voice);
+    this.voiceInput = el("input", "vinput hidden", this.voice) as HTMLInputElement;
+    this.voiceInput.placeholder = "Type to CAPCOM, Enter to send, Esc to cancel";
     this.help.innerHTML = `<h3>Controls</h3>
       <div><b>WASD</b> move / drive · <b>Mouse</b> look (click to capture) · <b>Shift</b> run / boost</div>
       <div><b>E</b> pick up drill · enter/exit rover · <b>Space</b>/<b>RMB</b> drill trigger</div>
       <div><b>N</b> simulate glove tap (Shift+N: crewmate) · <b>H</b> ask Mission Assistant · <b>J</b> auto-coach on/off</div>
       <div><b>F</b> synthetic detail on/off · <b>C</b> rover camera · <b>R</b> reset rover · <b>Q</b> reset samples</div>
-      <div><b>V</b> hold to talk to CAPCOM · <b>T</b> type a command · <b>?</b> this help</div>`;
+      <div><b>V</b> hold to talk to CAPCOM · <b>T</b> type a command · <b>G</b> CAPCOM reads assistant alerts</div>
+      <div><b>K</b> calibrate hand (open, then fist) · <b>?</b> this help</div>`;
   }
 
   toggleHelp(): void { this.help.classList.toggle("hidden"); }
+
+  setVoiceStatus(status: string, detail = ""): void {
+    this.voiceStatus.className = `vstatus ${status}`;
+    this.voiceStatus.textContent = `CAPCOM · ${status}${detail ? ` (${detail})` : ""}`;
+  }
+
+  addTranscript(role: string, text: string): void {
+    if (!text.trim()) return;
+    const line = el("div", `vline ${role}`, this.voiceLog);
+    line.innerHTML = `<b>${role === "user" ? "You" : role === "assistant" ? "CAPCOM" : "·"}</b> ${esc(text)}`;
+    while (this.voiceLog.children.length > 6) this.voiceLog.firstChild!.remove();
+  }
 
   setHubConnected(ok: boolean): void { this.root.classList.toggle("offline", !ok); }
 

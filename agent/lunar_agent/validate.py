@@ -38,7 +38,9 @@ def allowed_numbers(ctx: ContextPacket, derived: Derived) -> list[float]:
 
 
 def _matches(value: float, allowed: list[float]) -> bool:
-    return any(abs(value - a) <= max(0.6, 0.05 * abs(a)) for a in allowed)
+    """Exact up to one-decimal rounding / ~1% conversion drift, or rounding to a whole number."""
+    whole = float(value).is_integer()
+    return any(abs(value - a) <= 0.051 + 0.01 * abs(a) or (whole and abs(value - a) <= 0.5) for a in allowed)
 
 
 def grounding_problems(advice: AssistantAdvice, ctx: ContextPacket, derived: Derived) -> list[str]:
@@ -59,19 +61,30 @@ def grounding_problems(advice: AssistantAdvice, ctx: ContextPacket, derived: Der
 
 
 UNSAFE_PATTERNS = {
-    "rover_slope_alert": [r"\b(climb|continue|keep going|proceed|go)\b[^.]*\b(up|uphill|straight)\b",
-                          r"\bfull throttle\b", r"\bspeed up\b", r"\baccelerate\b"],
-    "rover_slope_ahead": [r"\bspeed up\b", r"\baccelerate\b", r"\bfull throttle\b"],
-    "drill_stall": [r"\b(press|push) harder\b", r"\bmore (force|pressure)\b", r"\bincrease (the )?(force|pressure|feed)\b",
-                    r"\bforce it\b"],
+    "rover_slope_alert": [r"\b(climb\w*|continu\w*|keep (going|driving)|proceed\w*|carry on|head)\b[^.]*?\b(up|uphill|straight|on)\b",
+                          r"\bkeep climbing\b", r"\bfull throttle\b", r"\bfloor it\b", r"\bspeed (up|it up)\b",
+                          r"\baccelerat\w*\b"],
+    "rover_slope_ahead": [r"\bspeed (up|it up)\b", r"\baccelerat\w*\b", r"\bfull throttle\b", r"\bfloor it\b"],
+    "drill_stall": [r"\b(press|push)\w* harder\b", r"\bmore (force|pressure)\b",
+                    r"\b(increase|add)\w* (the )?(force|pressure|feed)\b", r"\bforce it\b"],
 }
+NEGATIONS = re.compile(r"\b(don't|do not|never|avoid|instead of|rather than|not|no|stop|without)\b[^.]*$")
+
+
+def _unsafe_matches(text: str, pattern: str) -> bool:
+    """True if the pattern matches in a non-negated clause ("don't climb straight up" is fine)."""
+    for m in re.finditer(pattern, text):
+        clause = re.split(r"[.;!?,]", text[: m.start()])[-1]
+        if not NEGATIONS.search(clause):
+            return True
+    return False
 
 
 def safety_problems(advice: AssistantAdvice, derived: Derived) -> list[str]:
     problems = []
     action = advice.action.lower()
     for pattern in UNSAFE_PATTERNS.get(derived.situation, []):
-        if re.search(pattern, action):
+        if _unsafe_matches(action, pattern):
             problems.append(f"unsafe advice for {derived.situation}: matches /{pattern}/")
     if derived.hazard == "warning" and advice.hazard != "warning":
         problems.append(f"hazard downgraded from warning to {advice.hazard}")

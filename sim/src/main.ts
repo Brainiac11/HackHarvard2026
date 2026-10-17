@@ -2,11 +2,13 @@ import * as THREE from "three";
 import "./style.css";
 import { DrillSystem } from "./equipment/drill";
 import { buildRoverMesh, poseRover, RoverModel } from "./equipment/rover";
+import { TrackedHand } from "./hand/handModel";
 import { Input } from "./input/keyboard";
 import { HubClient } from "./net/hub";
 import type { Equipment, HubState, Mode, SimStateMsg } from "./net/messages";
 import { Walker } from "./player/walker";
 import { Hud } from "./ui/hud";
+import { GrokVoice } from "./voice/grokVoice";
 import { buildRocks, Environment } from "./world/sky";
 import { Terrain } from "./world/terrain";
 
@@ -63,6 +65,8 @@ async function main(): Promise<void> {
   handAnchor.position.set(0.3, -0.3, -0.62);
   camera.add(handAnchor);
 
+  const hand = new TrackedHand(camera);
+
   // ------------------------------------------------------------------ hub + HUD
   const hud = new Hud(`/terrain/site04/overview.png`);
   const hub = new HubClient();
@@ -101,7 +105,9 @@ async function main(): Promise<void> {
   });
   hub.on("hub.motors", (m) => {
     hud.updateMotors(m.levels, m.dominant, m.alert);
+    hand.showMotors(m.levels);
   });
+  hub.on("hand.frame", (f) => hand.onFrame(f));
   hub.on("hub.toast", (t) => hud.toast(t));
   hub.on("hub.welcome", (w) => hud.welcome(w));
   hub.on("hub.assistant", (a) => hud.assistantUpdate(a));
@@ -125,6 +131,64 @@ async function main(): Promise<void> {
     if (Math.hypot(p.x - rover.x, p.z - rover.z) < NEAR_ROVER_M) return "rover";
     return null;
   };
+
+  let calibrating = false;
+  const calibrateHand = async () => {
+    if (calibrating || !hand.active) {
+      hud.toast({ level: "warn", text: "Start the hand tracker first (tracker.html on the phone)" });
+      return;
+    }
+    calibrating = true;
+    const sample = async (label: string): Promise<number[]> => {
+      hud.toast({ level: "info", text: label });
+      await new Promise((r) => setTimeout(r, 900));
+      const acc: number[][] = [];
+      for (let i = 0; i < 30; i++) {
+        acc.push([...hand.raw]);
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return [0, 1, 2, 3, 4].map((f) => acc.map((a) => a[f]).sort((a, b) => a - b)[Math.floor(acc.length / 2)]);
+    };
+    const open = await sample("Calibration: hold your hand OPEN and flat");
+    const closed = await sample("Calibration: now make a FIST");
+    hand.calibration = { open, closed: closed.map((c, i) => Math.max(c, open[i] + 0.4)) };
+    hub.action("calibrate_hand", { calibration: hand.calibration });
+    calibrating = false;
+  };
+
+  // ------------------------------------------------------------------ Grok Voice (CAPCOM)
+  const voice = new GrokVoice(hub);
+  let speakAlerts = false;
+  voice.onStatus = (s, detail) => hud.setVoiceStatus(s, detail);
+  voice.onTranscript = (role, text) => {
+    hud.addTranscript(role, text);
+    if (role !== "tool") hub.send({ t: "voice.transcript", role, text });
+  };
+  hub.on("voice.local_reply", (r) => {
+    hud.addTranscript("assistant", `[offline] ${r.text}`);
+    if ("speechSynthesis" in window) speechSynthesis.speak(new SpeechSynthesisUtterance(r.text));
+  });
+  hub.on("hub.assistant", (a) => {
+    if (speakAlerts && a.status === "ready" && a.advice && a.trigger.startsWith("auto:alert")) {
+      voice.speak(`${a.advice.explanation} ${a.advice.action}`);
+    }
+  });
+  const textBox = hud.voiceInput;
+  textBox.addEventListener("focus", () => (input.typing = true));
+  textBox.addEventListener("blur", () => { input.typing = false; textBox.classList.add("hidden"); });
+  textBox.addEventListener("keydown", async (e) => {
+    e.stopPropagation();
+    if (e.key === "Escape") textBox.blur();
+    if (e.key !== "Enter" || !textBox.value.trim()) return;
+    const text = textBox.value.trim();
+    textBox.value = "";
+    textBox.blur();
+    const ok = await voice.sendText(text);
+    if (!ok) {
+      hud.addTranscript("user", text);
+      hub.action("local_command", { text }); // Grok unreachable: deterministic offline intents
+    }
+  });
 
   // ------------------------------------------------------------------ input handling
   const handleKeys = () => {
@@ -150,6 +214,22 @@ async function main(): Promise<void> {
     if (input.pressed("KeyR") && mode === "rover") rover.reset(rover.x, rover.z, rover.heading);
     if (input.pressed("KeyQ")) drill.resetBlocks();
     if (input.pressed("Slash")) hud.toggleHelp();
+    if (input.pressed("KeyK")) calibrateHand();
+    if (input.pressed("KeyV")) voice.pttDown();
+    if (voiceHeld && !input.held("KeyV")) voice.pttUp();
+    voiceHeld = input.held("KeyV");
+    if (input.pressed("KeyT")) {
+      document.exitPointerLock();
+      textBox.classList.remove("hidden");
+      setTimeout(() => textBox.focus(), 0);
+    }
+    if (input.pressed("KeyG")) {
+      speakAlerts = !speakAlerts;
+      hud.toast({ level: "info", text: `CAPCOM ${speakAlerts ? "will read" : "won't read"} assistant alerts aloud` });
+    }
+    // hand: a grip near authorized equipment picks up the drill / takes the rover controls
+    if (hand.active && hand.grip && !prevGrip && mode === "walk" && nearNow) request(nearNow);
+    prevGrip = hand.grip;
     if (input.pressed("Escape")) document.exitPointerLock();
   };
 
@@ -212,6 +292,8 @@ async function main(): Promise<void> {
   let last = performance.now();
   let physicsAcc = 0, telemetryAcc = 0, provAcc = 0;
   let steerSmooth = 0;
+  let prevGrip = false;
+  let voiceHeld = false;
   loading.remove();
   updateProvenance();
 
@@ -223,16 +305,21 @@ async function main(): Promise<void> {
     if (pending && clock - pending.at > PENDING_TIMEOUT_S) pending = null;
     handleKeys();
 
+    hand.update();
     const triggerHeld = input.held("Space") || input.mouseRight;
-    drill.trigger = THREE.MathUtils.clamp(drill.trigger + (triggerHeld ? 8 : -10) * dt, 0, 1);
+    const keyTrigger = THREE.MathUtils.clamp(drill.trigger + (triggerHeld ? 8 : -10) * dt, 0, 1);
+    drill.trigger = hand.active && mode === "drill" ? Math.max(hand.trigger, triggerHeld ? keyTrigger : 0) : keyTrigger;
 
     if (mode === "rover") {
       walker.look(input);
-      steerSmooth += (input.axis("KeyA", "KeyD") - steerSmooth) * Math.min(1, dt * 6);
       const w = input.held("KeyW"), s = input.held("KeyS");
+      const keySteer = input.axis("KeyA", "KeyD");
+      // hand control (dead-man: only while gripping): roll steers, index curl is throttle, open palm brakes
+      const handDrive = hand.active && hand.grip && !w && !s && keySteer === 0;
+      steerSmooth += ((handDrive ? hand.steer : keySteer) - steerSmooth) * Math.min(1, dt * 6);
       const roverInput = {
-        throttle: w ? 1 : s && rover.v <= 0.05 ? -0.5 : 0,
-        brake: s && rover.v > 0.05 ? 1 : 0,
+        throttle: w ? 1 : s && rover.v <= 0.05 ? -0.5 : handDrive ? hand.trigger : 0,
+        brake: (s && rover.v > 0.05) || (hand.active && hand.openPalm) ? 1 : 0,
         steer: steerSmooth,
         boost: input.shift(),
       };
@@ -269,12 +356,16 @@ async function main(): Promise<void> {
     }
     camera.updateMatrixWorld();
 
-    // drill (aim along view direction)
-    const aimDir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+    // drill: held in the tracked hand (aims where the bit points) or at a fixed anchor (aims at the crosshair)
+    const useHand = hand.active && mode === "drill";
+    const anchor = useHand ? hand.palm : handAnchor;
     const anchorWorld = new THREE.Object3D();
-    handAnchor.getWorldPosition(anchorWorld.position);
-    handAnchor.getWorldQuaternion(anchorWorld.quaternion);
-    drill.update(dt, anchorWorld, camera.position, aimDir, input.held("KeyW") ? 1 : 0);
+    anchor.getWorldPosition(anchorWorld.position);
+    anchor.getWorldQuaternion(anchorWorld.quaternion);
+    const aimDir = new THREE.Vector3(0, 0, -1).applyQuaternion(useHand ? anchorWorld.quaternion : camera.quaternion);
+    const aimOrigin = useHand ? anchorWorld.position : camera.position;
+    const push = input.held("KeyW") || (useHand && hand.push > 0.05) ? 1 : 0;
+    drill.update(dt, anchorWorld, aimOrigin, aimDir, push);
 
     // prompts
     const n = near();

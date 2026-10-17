@@ -77,7 +77,7 @@ class TerrainCtx(_Ctx):
     lookahead_max_slope_deg: float | None = None
     lookahead_max_slope_err_deg: float | None = None
     lookahead_at_m: float | None = None
-    lookahead_all_measured: bool | None = None
+    lookahead_max_measured: bool | None = None
     synthetic_detail: bool = True
 
 
@@ -116,3 +116,6 @@ class AssistantResult(BaseModel):
     latency_ms: int = 0
     repaired: bool = False
     source: Literal["chalk", "local"] = "local"
+    raw_problems: list[str] = Field(default_factory=list)  # validation problems before the guard (for evals)
+    guarded: bool = False  # production guard changed the model's answer
+    fallback: bool = False  # model failed entirely; rule-based advice returned
