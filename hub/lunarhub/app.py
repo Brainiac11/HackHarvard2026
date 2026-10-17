@@ -44,6 +44,7 @@ MOTORS_EVERY = 5  # 20 Hz motor broadcast
 COACH_EVERY = 10  # 10 Hz auto-coach check
 FRAME_TTL_MS = 150
 KEEPALIVE_S = 0.1
+STOP_TIMEOUT_S = 2.0
 
 
 @dataclass
@@ -95,6 +96,8 @@ class Hub:
         self._assistant_seq = 0
         self._assistant_task: asyncio.Task | None = None
         self._tasks: list[asyncio.Task] = []
+        self._glove_task: asyncio.Task | None = None
+        self._stopping = False
         self._telemetry_last = 0.0
 
     def _load_calibration(self) -> OutputCalibration:
@@ -112,17 +115,26 @@ class Hub:
             log.warning("XAI_API_KEY not set in .env: Grok Voice and patch generation disabled")
         self.sync_engine()
         loop = asyncio.get_running_loop()
+        self._glove_task = loop.create_task(self._supervise("glove", self.transport.run))
         self._tasks = [loop.create_task(self._supervise(name, fn)) for name, fn in [
-            ("glove", self.transport.run), ("nfc", self.nfc.run), ("haptics", self._haptic_loop),
-            ("state", self._state_loop),
+            ("nfc", self.nfc.run), ("haptics", self._haptic_loop), ("state", self._state_loop),
         ]]
         if self.settings.pregenerate_patches and self.settings.xai_api_key:
             self._tasks.append(loop.create_task(self._pregenerate_patches()))
 
     async def stop(self) -> None:
-        await self.transport.send_stop()
-        for t in self._tasks:
+        """Motors off, then shut down. Runs once: __main__ calls it as soon as the server starts shutting down."""
+        if self._stopping:
+            return
+        self._stopping = True
+        for t in self._tasks:  # the haptic loop first, so no frame can follow the stop
             t.cancel()
+        try:
+            await asyncio.wait_for(self.transport.send_stop(), STOP_TIMEOUT_S)
+        except TimeoutError:
+            log.warning("glove did not take the stop within %.0f s", STOP_TIMEOUT_S)
+        if self._glove_task is not None:
+            self._glove_task.cancel()
 
     async def _supervise(self, name: str, fn) -> None:
         delay = 1.0

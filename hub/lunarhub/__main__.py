@@ -8,16 +8,40 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
 import os
+import signal
+import sys
 from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
+from uvicorn.config import STARTUP_FAILURE
 
-from .app import Settings, create_app
+from .app import Hub, Settings, create_app
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+class HubServer(uvicorn.Server):
+    """Turns the glove motors off the moment shutdown starts.
+
+    uvicorn runs the app's lifespan shutdown (Hub.stop) only after open WebSockets close, and skips it on a second
+    Ctrl+C, which would leave the last vibration running. Closing the terminal (SIGHUP) shuts down like Ctrl+C.
+    """
+
+    def __init__(self, config: uvicorn.Config, hub: Hub) -> None:
+        super().__init__(config)
+        self.hub = hub
+
+    def capture_signals(self) -> contextlib.AbstractContextManager[None]:
+        signal.signal(signal.SIGHUP, self.handle_exit)
+        return super().capture_signals()
+
+    async def shutdown(self, sockets=None) -> None:
+        await self.hub.stop()
+        await super().shutdown(sockets)
 
 
 def main() -> None:
@@ -49,7 +73,12 @@ def main() -> None:
         voice_model=os.getenv("VOICE_MODEL", "grok-voice-latest"), voice_name=os.getenv("VOICE_NAME", "eve"),
         seed=args.seed, log_telemetry=args.log_telemetry, pregenerate_patches=not args.no_patches,
     )
-    uvicorn.run(create_app(settings), host=args.host, port=args.port, log_level="warning")
+    app = create_app(settings)
+    server = HubServer(uvicorn.Config(app, host=args.host, port=args.port, log_level="warning"), app.state.hub)
+    with contextlib.suppress(KeyboardInterrupt):  # uvicorn re-raises the Ctrl+C once it has shut down
+        server.run()
+    if not server.started:
+        sys.exit(STARTUP_FAILURE)
 
 
 if __name__ == "__main__":

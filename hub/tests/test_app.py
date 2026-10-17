@@ -6,8 +6,10 @@ import time
 from pathlib import Path
 
 import pytest
+import uvicorn
 from fastapi.testclient import TestClient
 
+from lunarhub.__main__ import HubServer
 from lunarhub.app import Settings, create_app
 from lunarhub.glove.transport import NullTransport
 from lunarhub.protocol import glove as gp
@@ -144,3 +146,16 @@ def test_tracker_relay(env):
 def test_agent_vocabulary_is_in_sync():
     exported = json.loads((ROOT / "agent" / "lunar_agent" / "vocabulary.json").read_text())
     assert exported == as_dict(), "run the vocabulary export (see hub/lunarhub/haptics/vocabulary.py)"
+
+
+def test_forced_quit_still_turns_motors_off(env):
+    """A second Ctrl+C makes uvicorn skip the lifespan shutdown; the server must stop the motors anyway."""
+    client, transport, hub = env
+    hub.engine.calibration.to_duty = lambda levels: [150] * 5  # motors buzzing
+    time.sleep(0.1)
+    assert gp.Parser().feed(transport.last_packet)[0].type == gp.PacketType.FRAME
+    server = HubServer(uvicorn.Config(client.app), hub)
+    server.servers, server.force_exit = [], True
+    client.portal.call(server.shutdown)
+    time.sleep(0.1)  # the haptic loop is gone, so no frame follows the stop
+    assert gp.Parser().feed(transport.last_packet)[0].type == gp.PacketType.STOP
