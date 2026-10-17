@@ -1,4 +1,5 @@
-"""Glove transports: null (simulated), USB serial, BLE. Same packet bytes on every link (PLAN.md §4.1).
+"""Glove transports: null (simulated), USB serial, BLE. Same packet bytes on every link (PLAN.md §4.1), except the
+temporary `espcmd` link to the text-command test firmware.
 
 Each transport runs a supervised `run()` loop that (re)connects forever with backoff, and exposes
 `send()`, which silently drops packets while disconnected (the firmware watchdog keeps motors safe).
@@ -185,13 +186,110 @@ class BleTransport(GloveTransport):
         await self._client.write_gatt_char(gp.BLE_RX_UUID, packet, response=False)
 
 
+# Temporary: the text-command test firmware (bluetooth_ESP32/ESP32_HackHarvard.ino). Delete EspCmdTransport once the
+# glove runs firmware that speaks the binary protocol.
+ESPCMD_DEVICE_NAME = "ESPcmd"
+ESPCMD_COMMAND_UUID = "12345678-1234-1234-1234-123456789001"
+
+
+def espcmd_command(duty: list[int]) -> str:
+    """'d0 d1 d2 d3 d4': duty 0-255 per finger, thumb..pinky. At most 19 bytes, within the 20-byte characteristic."""
+    return " ".join(str(max(0, min(255, int(d)))) for d in duty)
+
+
+class EspCmdTransport(GloveTransport):
+    """BLE link to the ESPcmd firmware, which takes short text commands instead of binary packets.
+
+    Its characteristic only accepts writes with response (one or two connection intervals each), too slow for a
+    50 Hz queue. So the hub keeps only the newest duty and one writer sends it whenever it changes: the motors always
+    get the latest frame, never a backlog. Pings, patterns and config have no text equivalent and are dropped.
+    """
+
+    name = "espcmd"
+
+    def __init__(self, device_name: str = ESPCMD_DEVICE_NAME) -> None:
+        super().__init__()
+        self.device_name = device_name
+        self._client = None
+        self._latest = espcmd_command([0] * gp.NUM_MOTORS)
+        self._sent: str | None = None
+        self._changed = asyncio.Event()
+        self._lock = asyncio.Lock()
+
+    async def send_frame(self, duty: list[int], ttl_ms: int = 150) -> None:
+        self._latest = espcmd_command(duty)
+        if self._latest != self._sent:
+            self._changed.set()
+
+    async def send_stop(self) -> None:
+        self._latest = espcmd_command([0] * gp.NUM_MOTORS)
+        await self._flush()  # directly: on shutdown the writer is about to be cancelled
+
+    async def send(self, packet: bytes) -> None:
+        pass  # binary packets mean nothing to this firmware
+
+    async def run(self) -> None:
+        from bleak import BleakClient, BleakScanner
+
+        attempt = 0
+        while True:
+            try:
+                self.detail = f"scanning for {self.device_name}"
+                device = await BleakScanner.find_device_by_name(self.device_name, timeout=5.0)
+                if device is None:
+                    raise RuntimeError(f"{self.device_name} not found")
+                async with BleakClient(device, disconnected_callback=lambda _c: self._drop()) as client:
+                    self._client, self._sent = client, None
+                    self.connected, attempt = True, 0
+                    self.detail = f"{device.address}"
+                    log.info("ESPcmd glove connected: %s", device.address)
+                    self._changed.set()  # bring the motors to the current frame straight away
+                    while self.connected:
+                        await self._changed.wait()
+                        self._changed.clear()
+                        await self._flush()
+            except Exception as exc:
+                self.detail = str(exc)
+                log.warning("ESPcmd glove: %s", exc)
+            finally:
+                self.connected = False
+                self._client = None
+            await asyncio.sleep(BACKOFF_S[min(attempt, len(BACKOFF_S) - 1)])
+            attempt += 1
+
+    def _drop(self) -> None:
+        self.connected = False
+        self._changed.set()  # wake the writer so run() notices and reconnects
+
+    async def _flush(self) -> None:
+        async with self._lock:
+            command = self._latest
+            if not self.connected or command == self._sent:
+                return
+            start = time.monotonic()
+            try:
+                await self._write(command.encode())
+            except Exception as exc:
+                log.warning("ESPcmd write failed: %s", exc)
+                self._drop()
+                return
+            self.rtt_ms = round((time.monotonic() - start) * 1000, 1)  # a write with response is a round trip
+            self._sent = command
+            self.tx_packets += 1
+
+    async def _write(self, packet: bytes) -> None:
+        await self._client.write_gatt_char(ESPCMD_COMMAND_UUID, packet, response=True)
+
+
 def make_transport(spec: str) -> GloveTransport:
-    """'null' | 'ble' | 'ble:<name>' | 'serial:<port>'."""
+    """'null' | 'ble' | 'ble:<name>' | 'espcmd' | 'espcmd:<name>' | 'serial:<port>'."""
     kind, _, arg = spec.partition(":")
     if kind == "null":
         return NullTransport()
     if kind == "ble":
         return BleTransport(arg or gp.BLE_DEVICE_NAME)
+    if kind == "espcmd":
+        return EspCmdTransport(arg or ESPCMD_DEVICE_NAME)
     if kind == "serial":
         if not arg:
             raise ValueError("serial transport needs a port, e.g. serial:/dev/ttyUSB0")

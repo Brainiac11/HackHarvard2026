@@ -26,7 +26,7 @@ def main() -> None:
     load_dotenv(ROOT / ".env", override=True)
     ap = argparse.ArgumentParser(prog="lunarhub", description="LunarHaptics hub")
     ap.add_argument("--glove", default=os.getenv("GLOVE_TRANSPORT", "null"),
-                    help="null | ble | ble:<name> | serial:<port>")
+                    help="null | ble | ble:<name> | espcmd | serial:<port>")
     ap.add_argument("--nfc", default=os.getenv("NFC_BACKEND", "auto"),
                     help="auto | pcsc | hid[:/dev/input/by-id/...] | serial:<port> | none")
     ap.add_argument("--assistant", default=os.getenv("ASSISTANT_BACKEND", "local"), choices=["local", "chalk"])

@@ -51,6 +51,7 @@ Real hardware:
 
 ```bash
 scripts/dev.sh --glove ble --nfc auto                 # or --glove serial:/dev/ttyUSB0
+scripts/dev.sh --glove espcmd --nfc auto              # ESP32 running bluetooth_ESP32/ESP32_HackHarvard.ino
 scripts/dev.sh --glove ble --nfc auto --assistant chalk --log-telemetry
 ```
 
