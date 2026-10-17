@@ -31,6 +31,7 @@ canvas { display: block; }
 .card .who { font-weight: 700; font-size: 16px; }
 .card .sub { color: var(--muted); margin-top: 3px; }
 .card .sub b { color: var(--ink); }
+.card .sub.enroll { color: var(--warn); }
 .card:not(:has(.patch)) { padding-left: 12px; }
 
 .status { top: 14px; right: 14px; display: flex; flex-direction: column; gap: 4px; min-width: 190px; }
@@ -76,8 +77,11 @@ canvas { display: block; }
 
 .prompt { position: absolute; bottom: 150px; left: 50%; transform: translateX(-50%); background: var(--panel);
   border: 1px solid var(--accent); padding: 6px 14px; border-radius: 16px; }
-.crosshair { position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px; border-radius: 50%;
-  border: 1px solid rgba(255,255,255,0.7); }
+.crosshair { position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; transform: translate(-50%, -50%);
+  border-radius: 50%; border: 1px solid rgba(255,255,255,0.7); }
+.crosshair.lock, .crosshair.far { width: 18px; height: 18px; border-width: 2px; }
+.crosshair.lock { border-color: #8dff9e; }
+.crosshair.far { border-color: #ffb347; }
 .toasts { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column;
   gap: 6px; align-items: center; }
 .toast { background: var(--panel); border: 1px solid var(--edge); border-left: 4px solid var(--info); padding: 6px 12px;
@@ -104,10 +108,10 @@ canvas { display: block; }
 .vstatus.thinking { color: var(--info); }
 .vstatus.speaking { color: var(--ok); }
 .vstatus.ready { color: var(--ink); }
-.vlog { margin-top: 4px; max-height: 150px; overflow: hidden; font-size: 13px; }
+.vlog { margin-top: 4px; max-height: 200px; overflow: hidden; font-size: 13px; }
 .vline { margin-top: 3px; }
-.vline.tool { color: var(--muted); font-size: 11px; font-family: ui-monospace, monospace; }
-.vline.assistant b { color: var(--ok); }
-.vline.user b { color: var(--accent); }
+.vline.v-tool { color: var(--muted); font-size: 11px; font-family: ui-monospace, monospace; }
+.vline.v-assistant b { color: var(--ok); }
+.vline.v-user b { color: var(--accent); }
 .vinput { margin-top: 6px; width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--accent);
   background: #0c0d10; color: var(--ink); font: inherit; }

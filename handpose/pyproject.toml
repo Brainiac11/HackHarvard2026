@@ -1,0 +1,56 @@
+[project]
+name = "lunarhand"
+version = "0.1.0"
+description = "LunarHaptics laptop hand tracker: AnyHand (WiLoR) on the GPU, fed JPEG frames by the phone tracker"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # Blackwell GPUs (RTX 50xx) need CUDA 12.8 builds (torch >= 2.7); tested with 2.11. AnyHand pins < 2.6 only
+    # because of the torch.load(weights_only) default change, which the server handles for its trusted checkpoints.
+    "torch==2.11.0",
+    "torchvision==0.26.0",
+    "numpy>=1.26,<2.3",
+    "opencv-python>=4.9",  # ultralytics requires the non-headless build; two cv2 packages would clash
+    "scipy>=1.11",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-dotenv>=1.0",
+    # WiLoR inference dependencies (its requirements.txt minus training-only packages and chumpy)
+    "pytorch-lightning>=2.4",
+    "smplx==0.1.28",
+    "yacs",
+    "omegaconf",  # the checkpoint's saved hparams (WiLoR gets it via hydra, which inference does not need)
+    "timm",
+    "einops",
+    "scikit-image",
+    "ultralytics>=8.3",
+    "dill",  # WiLoR's detector.pt is pickled with dill (ultralytics would otherwise pip-install it at runtime)
+    "pyrender",
+    "trimesh",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+# NVIDIA's own index for the CUDA runtime wheels torch pulls in (nvidia-cublas-cu12 etc.); checked before PyPI
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"
+
+[dependency-groups]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["lunarhand"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

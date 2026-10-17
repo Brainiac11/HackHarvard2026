@@ -1,6 +1,10 @@
-// Phone hand tracker (PLAN.md §9.6): rear camera -> MediaPipe HandLandmarker -> hand.frame over wss to the hub.
+// Phone hand tracker (PLAN.md §9.6): rear camera -> hand landmarks -> hand.frame over wss to the hub.
+// Two engines: "phone" runs MediaPipe HandLandmarker in the browser; "laptop" streams frames to AnyHand (WiLoR) on
+// the laptop GPU (handpose/), which copes better with the glove. Laptop falls back to phone while it's unavailable.
 // Built for iPhone Safari (playsinline video, GPU->CPU delegate fallback, wake lock) but works on any browser.
 import { FilesetResolver, HandLandmarker, type HandLandmarkerResult } from "@mediapipe/tasks-vision";
+import { HandednessFilter } from "../hand/gestures";
+import { AnyHandClient, type Detection } from "./anyhand";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const video = $<HTMLVideoElement>("video");
@@ -18,10 +22,29 @@ let landmarker: HandLandmarker | null = null;
 let delegate: "GPU" | "CPU" = "GPU";
 let rotation = Number(localStorage.getItem("lh.rotation") ?? 0); // 0 | 90 | 180 | 270
 let fpsCap = Number(localStorage.getItem("lh.fpsCap") ?? 24);
-let lastSent = 0, frames = 0, fpsWindowStart = performance.now(), fps = 0;
+let nextDue = 0, frames = 0, fpsWindowStart = performance.now(), fps = 0;
 let lowFpsStrikes = 0;
+let hits = 0, lastHandAt = performance.now(), lostHint = false, reconfiguring = false;
+const handedness = new HandednessFilter();
+
+type Engine = "phone" | "laptop";
+let engine: Engine = localStorage.getItem("lh.engine") === "laptop" ? "laptop" : "phone";
+const laptop = new AnyHandClient();
+
+// MediaPipe's hand models are trained on bare hands. A glove (one flat colour, motors and wires on top) scores well
+// under the 0.5 defaults, so start at "glove". Lower finds gloved hands more readily but can latch onto other hands.
+const SENSITIVITY = { glove: 0.3, max: 0.15, bare: 0.5 } as const;
+type Sensitivity = keyof typeof SENSITIVITY;
+const savedSens = localStorage.getItem("lh.sens");
+let sensitivity: Sensitivity = savedSens && savedSens in SENSITIVITY ? (savedSens as Sensitivity) : "glove";
+const confidence = (s: Sensitivity) => ({
+  minHandDetectionConfidence: SENSITIVITY[s], minHandPresenceConfidence: SENSITIVITY[s],
+  minTrackingConfidence: SENSITIVITY[s],
+});
 
 function setMsg(text: string): void { $("msg").textContent = text; }
+const usingLaptop = () => engine === "laptop" && laptop.ready;
+const otherHand = (h: string) => (h === "Left" ? "Right" : "Left");
 
 // ------------------------------------------------------------------ hub connection
 function connect(): void {
@@ -35,16 +58,14 @@ function connect(): void {
 }
 setInterval(() => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ t: "ping", ts: performance.now() })), 2000);
 
-// ------------------------------------------------------------------ model
+// ------------------------------------------------------------------ engines
 async function createLandmarker(d: "GPU" | "CPU"): Promise<HandLandmarker> {
   const files = await FilesetResolver.forVisionTasks("/mediapipe/wasm");
   return HandLandmarker.createFromOptions(files, {
     baseOptions: { modelAssetPath: "/mediapipe/hand_landmarker.task", delegate: d },
     runningMode: "VIDEO",
     numHands: 1,
-    minHandDetectionConfidence: 0.5,
-    minHandPresenceConfidence: 0.5,
-    minTrackingConfidence: 0.5,
+    ...confidence(sensitivity),
   });
 }
 
@@ -57,7 +78,7 @@ async function initModel(): Promise<void> {
     landmarker = await createLandmarker("CPU");
     delegate = "CPU";
   }
-  $("delegate").textContent = delegate;
+  showEngine();
 }
 
 async function fallbackToCpu(): Promise<void> {
@@ -66,8 +87,30 @@ async function fallbackToCpu(): Promise<void> {
   landmarker?.close();
   landmarker = await createLandmarker("CPU");
   delegate = "CPU";
-  $("delegate").textContent = delegate;
+  showEngine();
 }
+
+function fromMediaPipe(r: HandLandmarkerResult): Detection | null {
+  if (!r.landmarks.length) return null;
+  const c = r.handedness[0]?.[0];
+  // MediaPipe labels hands as if the frame were a mirrored selfie; the frames we give it are unmirrored
+  return { landmarks: r.landmarks[0], world: r.worldLandmarks[0] ?? [], hand: otherHand(c?.categoryName ?? "Left"),
+    score: c?.score ?? 0 };
+}
+
+function showEngine(): void {
+  $("engine").textContent = `Engine: ${engine}`;
+  $("delegate").textContent = usingLaptop() ? `AnyHand ${Math.round(laptop.inferMs)}/${Math.round(laptop.latencyMs)} ms`
+    : landmarker ? `MediaPipe ${delegate}` : "no model";
+}
+
+const laptopDown = () =>
+  `Laptop tracker: ${laptop.detail}. ${landmarker ? "Using the phone model meanwhile." : "No phone model to fall back on."}`;
+laptop.onResult = (d) => onDetection(d, performance.now());
+laptop.onStatus = (ready) => {
+  showEngine();
+  if (engine === "laptop") setMsg(ready ? "" : laptopDown());
+};
 
 // ------------------------------------------------------------------ geometry helpers
 function rotate2d(x: number, y: number): [number, number] {
@@ -87,32 +130,31 @@ function rotateWorld(x: number, y: number): [number, number] {
   }
 }
 
-function send(result: HandLandmarkerResult): void {
+function send(d: Detection | null, hand: string | null): void {
   if (!ws || ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 64_000) return;
-  if (!result.landmarks.length) return;
-  const lm = result.landmarks[0].map((p) => {
+  if (!d) return;
+  const lm = d.landmarks.map((p) => {
     let [x, y] = rotate2d(p.x, p.y);
     if (mirror) x = 1 - x;
     return [+x.toFixed(4), +y.toFixed(4), +p.z.toFixed(4)];
   });
-  const wlm = (result.worldLandmarks[0] ?? []).map((p) => {
+  const wlm = d.world.map((p) => {
     let [x, y] = rotateWorld(p.x, p.y);
     if (mirror) x = -x;
     return [+x.toFixed(4), +y.toFixed(4), +p.z.toFixed(4)];
   });
-  const handed = result.handedness[0]?.[0];
-  ws.send(JSON.stringify({ t: "hand.frame", ts: Date.now() / 1000, hand: handed?.categoryName ?? "Right",
-    score: +(handed?.score ?? 0).toFixed(3), lm, wlm, fps: +fps.toFixed(1) }));
+  ws.send(JSON.stringify({ t: "hand.frame", ts: Date.now() / 1000, hand: hand ?? "Right",
+    score: +d.score.toFixed(3), lm, wlm, fps: +fps.toFixed(1), engine: usingLaptop() ? "anyhand" : "mediapipe" }));
 }
 
-function draw(result: HandLandmarkerResult): void {
+function draw(d: Detection | null, hand: string | null): void {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  const pts = result.landmarks[0];
-  $("hand").textContent = pts ? `${result.handedness[0]?.[0]?.categoryName ?? "?"}` : "none";
-  if (!pts) return;
+  $("hand").textContent = d ? hand ?? "?" : "none";
+  if (!d) return;
+  const pts = d.landmarks;
   const W = canvas.width, H = canvas.height;
   ctx.lineWidth = 3;
-  ctx.strokeStyle = "#f0a83a";
+  ctx.strokeStyle = usingLaptop() ? "#5fd08a" : "#f0a83a";
   for (const [a, b] of BONES) {
     ctx.beginPath();
     ctx.moveTo(pts[a].x * W, pts[a].y * H);
@@ -128,32 +170,60 @@ function draw(result: HandLandmarkerResult): void {
 }
 
 // ------------------------------------------------------------------ loop
-function loop(): void {
-  const now = performance.now();
-  const schedule = () => ("requestVideoFrameCallback" in video
-    ? (video as any).requestVideoFrameCallback(loop) : requestAnimationFrame(loop));
-  if (!landmarker || video.readyState < 2 || now - lastSent < 1000 / fpsCap - 2) {
-    schedule();
-    return;
-  }
-  lastSent = now;
-  const result = landmarker.detectForVideo(video, now);
-  draw(result);
-  send(result);
+function onDetection(d: Detection | null, now: number): void {
+  // the sim reads handedness against the landmarks it receives, which we mirror for the selfie camera
+  const hand = d ? handedness.update(mirror ? otherHand(d.hand) : d.hand) : null;
+  draw(d, hand);
+  send(d, hand);
   frames++;
+  if (d) {
+    hits++;
+    lastHandAt = now;
+  }
   if (now - fpsWindowStart > 1000) {
     fps = (frames * 1000) / (now - fpsWindowStart);
-    frames = 0;
+    $("seen").textContent = `${Math.round((100 * hits) / frames)}%`; // share of frames with a hand found
+    frames = hits = 0;
     fpsWindowStart = now;
     $("fps").textContent = fps.toFixed(0);
+    showEngine();
+    if (now - lastHandAt > 3000 !== lostHint) {
+      lostHint = !lostHint;
+      setMsg(lostHint ? `No hand found: show the whole glove, fingers spread, in bright even light${
+        usingLaptop() || sensitivity === "max" ? "" : " (or tap Sens)"}` : "");
+    }
     // iOS: if the GPU delegate can't sustain 12 fps for 3 s, re-create on CPU
-    lowFpsStrikes = fps < 12 ? lowFpsStrikes + 1 : 0;
+    lowFpsStrikes = !usingLaptop() && fps < 12 ? lowFpsStrikes + 1 : 0;
     if (lowFpsStrikes >= 3 && delegate === "GPU") {
       lowFpsStrikes = 0;
       fallbackToCpu();
     }
   }
+}
+
+function loop(): void {
+  const now = performance.now();
+  const schedule = () => ("requestVideoFrameCallback" in video
+    ? (video as any).requestVideoFrameCallback(loop) : requestAnimationFrame(loop));
+  if (video.readyState >= 2 && now >= nextDue) {
+    if (usingLaptop()) {
+      if (laptop.canSend(now)) {
+        markSent(now);
+        void laptop.sendFrame(video); // result arrives via laptop.onResult
+      }
+    } else if (landmarker && !reconfiguring) {
+      markSent(now);
+      onDetection(fromMediaPipe(landmarker.detectForVideo(video, now)), now);
+    }
+  }
   schedule();
+}
+
+// Average out to fpsCap. A "time since last send" gate quantises to camera frames: at 30 fps a 24 fps cap needs
+// 41.7 ms, so every other frame (66 ms) passes and the real rate drops to 15 fps.
+function markSent(now: number): void {
+  const interval = 1000 / fpsCap;
+  nextDue = Math.max(nextDue + interval, now - interval);
 }
 
 async function requestWakeLock(): Promise<void> {
@@ -177,6 +247,31 @@ $("cap").onclick = () => {
   $("cap").textContent = `${fpsCap} fps`;
 };
 $("cap").textContent = `${fpsCap} fps`;
+$("sens").onclick = async () => {
+  const order = Object.keys(SENSITIVITY) as Sensitivity[];
+  sensitivity = order[(order.indexOf(sensitivity) + 1) % order.length];
+  localStorage.setItem("lh.sens", sensitivity);
+  $("sens").textContent = `Sens: ${sensitivity}`;
+  reconfiguring = true;
+  try {
+    await landmarker?.setOptions(confidence(sensitivity));
+  } finally {
+    reconfiguring = false;
+  }
+};
+$("sens").textContent = `Sens: ${sensitivity}`;
+let started = false;
+$("engine").onclick = () => {
+  engine = engine === "phone" ? "laptop" : "phone";
+  localStorage.setItem("lh.engine", engine);
+  if (started && engine === "laptop") laptop.connect();
+  if (engine === "phone") {
+    laptop.close();
+    setMsg("");
+  }
+  showEngine();
+};
+showEngine();
 
 $("start").onclick = async () => {
   $("start").remove();
@@ -191,10 +286,17 @@ $("start").onclick = async () => {
     await video.play();
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
+    started = true;
+    if (engine === "laptop") laptop.connect();
     setMsg("Loading hand model…");
-    await initModel();
+    try {
+      await initModel(); // also the fallback whenever the laptop engine is unavailable
+    } catch (err) {
+      if (engine !== "laptop") throw err;
+      console.warn("MediaPipe failed to load; laptop engine only", err); // the laptop engine doesn't need it
+    }
     await requestWakeLock();
-    setMsg("");
+    if (!usingLaptop()) setMsg(engine === "laptop" ? laptopDown() : "");
     connect();
     loop();
   } catch (err) {

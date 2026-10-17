@@ -69,7 +69,8 @@ export class Hud {
     this.help.innerHTML = `<h3>Controls</h3>
       <div><b>WASD</b> move / drive · <b>Mouse</b> look (click to capture) · <b>Shift</b> run / boost</div>
       <div><b>E</b> pick up drill · enter/exit rover · <b>Space</b>/<b>RMB</b> drill trigger</div>
-      <div><b>N</b> simulate glove tap (Shift+N: crewmate) · <b>H</b> ask Mission Assistant · <b>J</b> auto-coach on/off</div>
+      <div>Drill aim: put the reticle on a sample (tracked hand: just above your fist) · green = in reach, amber = step closer</div>
+      <div><b>N</b> simulate glove tap, or enroll an unknown tag (Shift+N: crewmate) · <b>H</b> ask Mission Assistant · <b>J</b> auto-coach on/off</div>
       <div><b>F</b> synthetic detail on/off · <b>C</b> rover camera · <b>R</b> reset rover · <b>Q</b> reset samples</div>
       <div><b>V</b> hold to talk to CAPCOM · <b>T</b> type a command · <b>G</b> CAPCOM reads assistant alerts</div>
       <div><b>K</b> calibrate hand (open, then fist) · <b>?</b> this help</div>`;
@@ -84,24 +85,29 @@ export class Hud {
 
   addTranscript(role: string, text: string): void {
     if (!text.trim()) return;
-    const line = el("div", `vline ${role}`, this.voiceLog);
+    const line = el("div", `vline v-${role}`, this.voiceLog); // prefixed: ".assistant" is the Mission Assistant panel
     line.innerHTML = `<b>${role === "user" ? "You" : role === "assistant" ? "CAPCOM" : "·"}</b> ${esc(text)}`;
     while (this.voiceLog.children.length > 6) this.voiceLog.firstChild!.remove();
+    this.voiceLog.scrollTop = this.voiceLog.scrollHeight; // the box clips: keep the newest line in view
   }
 
   setHubConnected(ok: boolean): void { this.root.classList.toggle("offline", !ok); }
 
   updateState(s: HubState): void {
     const p = s.profile;
+    const nameOf = (id: string) => esc(s.profiles.find((x) => x.id === id)?.name ?? id);
+    const unknown = s.nfc.unknown_uid
+      ? `<div class="sub enroll">Unknown glove ${esc(s.nfc.unknown_uid.slice(0, 8))}… · <b>N</b> enroll to ${nameOf("rivera")} · <b>Shift+N</b> ${nameOf("okafor")}</div>`
+      : "";
     if (p) {
       const img = p.patch_url ? `<img class="patch" src="${esc(p.patch_url)}" alt="">` : "";
       const auth = s.equipment.authorized.length ? s.equipment.authorized.join(", ") : "none";
       this.card.innerHTML = `${img}<div class="ring">${esc(p.callsign)}</div>
         <div class="who">${esc(p.name)}</div>
         <div class="sub">Active: <b>${s.equipment.active ?? "—"}</b> · authorized: ${auth}</div>
-        <div class="sub small">drill ×${p.settings.drill.sensitivity} · terrain ×${p.settings.rover.terrain_sensitivity} · rumble ×${p.settings.rover.vibration} · slope warn ${p.settings.rover.slope_warn_deg}°</div>`;
+        <div class="sub small">drill ×${p.settings.drill.sensitivity} · terrain ×${p.settings.rover.terrain_sensitivity} · rumble ×${p.settings.rover.vibration} · slope warn ${p.settings.rover.slope_warn_deg}°</div>${unknown}`;
     } else {
-      this.card.innerHTML = `<div class="who">No astronaut identified</div><div class="sub">Tap your glove on the reader (or press N)</div>`;
+      this.card.innerHTML = `<div class="who">No astronaut identified</div><div class="sub">Tap your glove on the reader (or press N)</div>${unknown}`;
     }
     const light = (ok: boolean, label: string, detail = "") =>
       `<div class="light ${ok ? "on" : "off"}"><i></i>${label}${detail ? `<span>${detail}</span>` : ""}</div>`;
@@ -109,7 +115,8 @@ export class Hud {
       light(true, "Hub"),
       light(s.glove.connected, `Glove ${s.glove.transport}`, s.glove.rtt_ms != null ? `${s.glove.rtt_ms} ms` : ""),
       light(s.nfc.backend === "pcsc" || s.nfc.backend === "hid" || s.nfc.backend === "serial", "NFC", s.nfc.backend),
-      light(s.tracker.connected, "Tracker", s.tracker.connected ? `${s.tracker.fps} fps` : ""),
+      light(s.tracker.connected, "Tracker", s.tracker.connected
+        ? `${s.tracker.fps} fps${s.tracker.engine === "anyhand" ? " · AnyHand" : ""}` : ""),
       light(s.voice.configured, "Grok"),
       light(!s.assistant.last_error, "Assistant", `${s.assistant.backend}${s.assistant.auto ? " · auto" : ""}`),
     ].join("");
@@ -146,7 +153,14 @@ export class Hud {
     if (text) this.prompt.textContent = text;
   }
 
-  setCrosshair(visible: boolean): void { this.crosshair.classList.toggle("hidden", !visible); }
+  /** x, y: screen position as 0..1 fractions (the drill reticle moves). state: on a sample in reach / out of reach. */
+  setCrosshair(visible: boolean, x = 0.5, y = 0.5, state: "" | "lock" | "far" = ""): void {
+    this.crosshair.classList.toggle("hidden", !visible);
+    this.crosshair.classList.toggle("lock", state === "lock");
+    this.crosshair.classList.toggle("far", state === "far");
+    this.crosshair.style.left = `${x * 100}%`;
+    this.crosshair.style.top = `${y * 100}%`;
+  }
 
   toast(t: HubToast | { level: string; text: string }): void {
     const div = el("div", `toast ${t.level}`, this.toasts, t.text);

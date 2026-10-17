@@ -21,6 +21,8 @@ def store(tmp_path):
     path = tmp_path / "profiles.json"
     shutil.copy(ROOT / "data" / "profiles.json", path)
     s = ProfileStore(path)
+    for p in s.profiles:  # drop tags enrolled on the demo machine (they live in the real profiles.json)
+        p.uids = []
     s.enroll(UID_A, "rivera")
     return s
 
@@ -108,6 +110,14 @@ def test_enrollment_then_scan(store):
     out = m.enroll("okafor")
     assert out.ok and m.profile.id == "okafor" and m.active_equipment == "rover"
     assert store.by_uid("CAFEBABE").id == "okafor"
+
+
+def test_enroll_rejects_unknown_profile(store):
+    m = MissionState(store)
+    m.on_scan("CAFEBABE")
+    out = m.enroll("nobody")
+    assert not out.ok and out.reason == "unknown_profile"
+    assert m.unknown_uid == "CAFEBABE" and store.by_uid("CAFEBABE") is None
 
 
 def test_equipment_requires_authorization(store):

@@ -10,6 +10,7 @@ import asyncio
 import glob
 import logging
 import time
+from pathlib import Path
 from typing import Callable
 
 log = logging.getLogger("lunarhub.nfc")
@@ -76,6 +77,8 @@ class NfcService:
             self.error = f"PC/SC unavailable: {exc}"
             return False
         if not found:
+            if Path("/sys/module/pn533_usb").exists():
+                self.error = "kernel driver pn533_usb has claimed the reader; run scripts/setup_nfc.sh"
             return False
         service = self
 
@@ -83,14 +86,21 @@ class NfcService:
             def update(self, observable, actions):
                 added, _removed = actions
                 for card in added:
+                    conn = card.createConnection()
                     try:
-                        conn = card.createConnection()
                         conn.connect()
                         data, sw1, sw2 = conn.transmit(GET_UID_APDU)
                         if (sw1, sw2) == (0x90, 0x00):
                             service._emit_threadsafe(toHexString(data).replace(" ", ""))
+                        else:
+                            log.warning("PC/SC UID read returned status %02X %02X", sw1, sw2)
                     except Exception as exc:
                         log.warning("PC/SC read failed: %s", exc)
+                    finally:
+                        try:
+                            conn.disconnect()
+                        except Exception:
+                            pass
 
         self.backend, self.reader, self.error = "pcsc", str(found[0]), ""
         monitor = CardMonitor()

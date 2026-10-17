@@ -2,20 +2,24 @@
 
 const WORKLET = `
 class PcmCapture extends AudioWorkletProcessor {
-  constructor() { super(); this.ratio = sampleRate / 24000; this.pos = 0; this.buf = []; this.on = false;
-    this.port.onmessage = (e) => { this.on = e.data === "on"; if (!this.on) this.flush(); }; }
+  constructor() { super(); this.ratio = sampleRate / 24000; this.pos = 0; this.prev = 0; this.buf = []; this.on = false;
+    this.port.onmessage = (e) => {
+      this.on = e.data === "on";
+      if (!this.on) { this.flush(); this.port.postMessage("flushed"); }
+    }; }
   flush() { if (this.buf.length) { this.port.postMessage(Int16Array.from(this.buf).buffer); this.buf = []; } }
   process(inputs) {
     const ch = inputs[0] && inputs[0][0];
     if (!ch || !this.on) return true;
-    // linear resample from the context rate to 24 kHz
+    // linear resample from the context rate to 24 kHz (index -1 is the previous block's last sample)
     while (this.pos < ch.length - 1) {
       const i = Math.floor(this.pos), f = this.pos - i;
-      const s = ch[i] * (1 - f) + ch[i + 1] * f;
+      const s = (i < 0 ? this.prev : ch[i]) * (1 - f) + ch[i + 1] * f;
       this.buf.push(Math.max(-32768, Math.min(32767, Math.round(s * 32767))));
       this.pos += this.ratio;
     }
     this.pos -= ch.length;
+    this.prev = ch[ch.length - 1];
     if (this.buf.length >= 480) this.flush(); // 20 ms
     return true;
   }
@@ -33,10 +37,16 @@ export function toBase64(buf: ArrayBuffer): string {
 export class Mic {
   private ctx: AudioContext | null = null;
   private node: AudioWorkletNode | null = null;
+  private opening: Promise<void> | null = null;
+  private flushed: (() => void)[] = [];
   onChunk: (b64: string) => void = () => {};
 
-  async start(): Promise<void> {
-    if (this.ctx) return;
+  start(): Promise<void> {
+    this.opening ??= this.open().catch((e) => { this.opening = null; throw e; });
+    return this.opening;
+  }
+
+  private async open(): Promise<void> {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
     });
@@ -44,13 +54,23 @@ export class Mic {
     const url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
     await this.ctx.audioWorklet.addModule(url);
     this.node = new AudioWorkletNode(this.ctx, "pcm-capture");
-    this.node.port.onmessage = (e) => this.onChunk(toBase64(e.data as ArrayBuffer));
+    this.node.port.onmessage = (e) => {
+      if (e.data === "flushed") this.flushed.splice(0).forEach((r) => r());
+      else this.onChunk(toBase64(e.data as ArrayBuffer));
+    };
     this.ctx.createMediaStreamSource(stream).connect(this.node);
   }
 
+  /** Turning off resolves once the last captured samples have been delivered to onChunk. */
   async setActive(on: boolean): Promise<void> {
     await this.ctx?.resume();
-    this.node?.port.postMessage(on ? "on" : "off");
+    if (!this.node) return;
+    const done = on ? Promise.resolve() : new Promise<void>((r) => {
+      this.flushed.push(r);
+      setTimeout(r, 300); // worklet gone quiet: don't hang the turn
+    });
+    this.node.port.postMessage(on ? "on" : "off");
+    await done;
   }
 }
 

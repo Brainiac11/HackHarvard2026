@@ -5,7 +5,9 @@
       "id": "rivera",
       "name": "Cmdr. Ana Rivera",
       "callsign": "HAWK",
-      "uids": [],
+      "uids": [
+        "0423E9CC490289"
+      ],
       "auth_pattern": "double",
       "global": {
         "gain": 1.0,

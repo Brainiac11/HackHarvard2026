@@ -49,6 +49,25 @@ export function palmRollDeg(w: number[][], hand: string): number {
   return d;
 }
 
+/** MediaPipe's Left/Right call is unreliable on a gloved hand and can flip frame to frame, which would flip the
+ *  steering roll by 180°. Keep the current label until the other one wins `switchAfter` frames in a row. */
+export class HandednessFilter {
+  label: string | null = null;
+  private streak = 0;
+  constructor(private switchAfter = 12) {}
+
+  update(raw: string): string {
+    if (this.label === null || raw === this.label) {
+      this.label = raw;
+      this.streak = 0;
+    } else if (++this.streak >= this.switchAfter) {
+      this.label = raw;
+      this.streak = 0;
+    }
+    return this.label;
+  }
+}
+
 export function hysteresis(prev: boolean, value: number, on: number, off: number): boolean {
   return prev ? value > off : value > on;
 }

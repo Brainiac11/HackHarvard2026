@@ -4,7 +4,13 @@
 import * as THREE from "three";
 
 const V0 = 0.02; // m/s
-const REACH_M = 1.7;
+export const DRILL_REACH_M = 2.4; // from the eye: arm + drill, with slack so you needn't stand on the stand
+const SIGHT_M = 12; // a block aimed at from this far is named in the prompt ("step closer")
+// aim assist: a block whose edge is within ASSIST of the aim ray is the target; once aimed, it holds out to HOLD,
+// and while drilling out to LOCK, so hand-tracking jitter can't drop the target or end the contact
+const ASSIST_RAD = THREE.MathUtils.degToRad(6);
+const HOLD_RAD = THREE.MathUtils.degToRad(9);
+const LOCK_RAD = THREE.MathUtils.degToRad(15);
 const STALL_RATE = 0.002;
 const STALL_AFTER_S = 2.0; // grind for a while before declaring a stall
 const BLOCK_DEPTH = 0.45;
@@ -39,6 +45,45 @@ function labelSprite(text: string, sub: string): THREE.Sprite {
   return s;
 }
 
+export interface AimHit { index: number; point: THREE.Vector3; normal: THREE.Vector3; distance: number }
+
+const _box = new THREE.Box3(), _center = new THREE.Vector3(), _near = new THREE.Vector3(), _toward = new THREE.Vector3();
+const _ray = new THREE.Raycaster();
+
+/**
+ * What the drill is aimed at. A direct hit wins; otherwise the block whose nearest point is within `cone` of the ray
+ * (`hold` for the block aimed at last frame), and the contact point is that nearest spot on its surface.
+ */
+export function acquireTarget(origin: THREE.Vector3, dir: THREE.Vector3, meshes: THREE.Mesh[], far: number,
+                              cone: number, held = -1, hold = cone): AimHit | null {
+  const hitOf = (index: number, h: THREE.Intersection): AimHit => ({
+    index, point: h.point.clone(), distance: h.distance,
+    normal: h.face!.normal.clone().transformDirection(meshes[index].matrixWorld),
+  });
+  _ray.set(origin, dir);
+  _ray.far = far;
+  const direct = _ray.intersectObjects(meshes, false)[0];
+  if (direct) return hitOf(meshes.indexOf(direct.object as THREE.Mesh), direct);
+
+  let best = -1, bestMiss = Infinity;
+  meshes.forEach((mesh, i) => {
+    _box.setFromObject(mesh).getCenter(_center);
+    const along = _toward.subVectors(_center, origin).dot(dir);
+    if (along <= 0 || along > far) return; // behind the eye, or out of sight
+    _box.clampPoint(_near.copy(origin).addScaledVector(dir, along), _near);
+    const miss = _toward.subVectors(_near, origin).angleTo(dir);
+    if (miss < (i === held ? hold : cone) && miss < bestMiss) { best = i; bestMiss = miss; }
+  });
+  if (best < 0) return null;
+  // aim at that nearest point (nudged inward so the ray can't graze past the edge)
+  _box.setFromObject(meshes[best]).getCenter(_center);
+  _box.clampPoint(_near.copy(origin).addScaledVector(dir, _toward.subVectors(_center, origin).dot(dir)), _near);
+  _near.lerp(_center, 0.05);
+  _ray.set(origin, _toward.subVectors(_near, origin).normalize());
+  const h = _ray.intersectObject(meshes[best], false)[0];
+  return h ? hitOf(best, h) : null;
+}
+
 export interface DrillTelemetry {
   held: boolean; trigger: number; target: "soft" | "hard" | null; contact: boolean;
   hardness: number; depth_m: number; rate_mps: number; stalled: boolean;
@@ -49,7 +94,8 @@ export class DrillSystem {
   readonly tool = new THREE.Group();
   readonly blocks: Block[] = [];
   private bit: THREE.Mesh;
-  private raycaster = new THREE.Raycaster();
+  private marker: THREE.Mesh;
+  private bore: { block: Block; point: THREE.Vector3; normal: THREE.Vector3 } | null = null;
   private dust: THREE.Points;
   private dustVel: Float32Array;
   private dustLife: Float32Array;
@@ -57,7 +103,10 @@ export class DrillSystem {
   private contactTime = 0;
   held = false;
   trigger = 0;
-  target: Block | null = null;
+  target: Block | null = null; // aimed at and within reach
+  tooFar: Block | null = null; // aimed at but out of reach
+  aimDistance = 0; // m from the eye to the aimed-at block
+  readonly aimPoint = new THREE.Vector3(); // where the bit points (the reticle goes here)
   contact = false;
   rate = 0;
   stalled = false;
@@ -88,6 +137,12 @@ export class DrillSystem {
     this.tool.traverse((o) => { if ((o as THREE.Mesh).isMesh) o.castShadow = true; });
     this.parkTool();
     scene.add(this.tool);
+
+    // aim ring on the block face the bit is pointing at
+    this.marker = new THREE.Mesh(new THREE.RingGeometry(0.045, 0.062, 32),
+      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.9, side: THREE.DoubleSide, toneMapped: false }));
+    this.marker.visible = false;
+    scene.add(this.marker);
 
     // sample blocks on stands (properties are simulated, not NASA measurements)
     const specs = [
@@ -136,33 +191,48 @@ export class DrillSystem {
   }
 
   /**
-   * hand: where the drill is held (world pose). aim: ray origin/direction for targeting.
+   * hand: where the drill is held (world position; its orientation gives "up"). aim: unit ray from the eye.
    * push 0..1: hand moving forward / W key.
    */
   update(dt: number, hand: THREE.Object3D, aimOrigin: THREE.Vector3, aimDir: THREE.Vector3, push: number): void {
     this.updateDust(dt);
-    this.target = null;
+    const prev = this.target ?? this.tooFar;
+    this.target = this.tooFar = null;
     this.contact = false;
     this.rate = 0;
     if (!this.held) {
       this.stalled = false;
       this.contactTime = 0;
       this.shake = 0;
+      this.bore = null;
+      this.marker.visible = false;
+      this.highlight(null, false);
       return;
     }
+
+    const drilling = this.bore !== null && this.trigger > 0.02;
+    const held = drilling ? this.bore!.block : prev;
+    const aim = acquireTarget(aimOrigin, aimDir, this.blocks.map((b) => b.mesh), SIGHT_M, ASSIST_RAD,
+      held ? this.blocks.indexOf(held) : -1, drilling ? LOCK_RAD : HOLD_RAD);
+    const block = aim ? this.blocks[aim.index] : null;
+    const inReach = !!aim && aim.distance <= DRILL_REACH_M;
+    this.aimDistance = aim ? aim.distance : 0;
+    if (aim) this.aimPoint.copy(aim.point);
+    else this.aimPoint.copy(aimOrigin).addScaledVector(aimDir, DRILL_REACH_M);
+
+    // the tool stays in the hand and turns its bit toward whatever it's aimed at
     this.tool.position.copy(hand.position);
-    this.tool.quaternion.copy(hand.quaternion);
+    const look = new THREE.Matrix4().lookAt(hand.position, this.aimPoint, new THREE.Vector3(0, 1, 0).applyQuaternion(hand.quaternion));
+    this.tool.quaternion.slerp(new THREE.Quaternion().setFromRotationMatrix(look), 1 - Math.exp(-25 * dt));
     this.bit.rotation.y += this.trigger * 60 * dt;
 
-    this.raycaster.set(aimOrigin, aimDir);
-    this.raycaster.far = REACH_M;
-    const hits = this.raycaster.intersectObjects(this.blocks.map((b) => b.mesh), false);
-    if (hits.length) {
-      const hit = hits[0];
-      const block = this.blocks.find((b) => b.mesh === hit.object)!;
+    if (block && inReach) {
       this.target = block;
       if (this.trigger > 0.02) {
         this.contact = true;
+        // keep boring the same spot for as long as the trigger stays down, however much the hand wobbles
+        if (this.bore?.block !== block) this.bore = { block, point: aim!.point.clone(), normal: aim!.normal.clone() };
+        const { point: p, normal: n } = this.bore;
         const feed = this.trigger * (0.6 + 0.4 * push);
         this.rate = feed * V0 * (1 - block.hardness) ** 2;
         block.depth = Math.min(BLOCK_DEPTH, block.depth + this.rate * dt);
@@ -171,17 +241,33 @@ export class DrillSystem {
           block.depth = 0;
         }
         // hole marker on the struck face, growing with depth
-        const n = hit.face!.normal.clone().transformDirection(block.mesh.matrixWorld);
         block.hole.visible = true;
-        block.hole.position.copy(hit.point).addScaledVector(n, 0.002);
-        block.hole.lookAt(hit.point.clone().add(n));
+        block.hole.position.copy(p).addScaledVector(n, 0.002);
+        block.hole.lookAt(p.clone().add(n));
         block.hole.scale.setScalar(0.6 + 8 * block.depth);
-        this.emitDust(hit.point, n, block, dt);
-      }
+        this.emitDust(p, n, block, dt);
+      } else this.bore = null;
+    } else {
+      this.bore = null;
+      this.tooFar = block;
     }
+    this.marker.visible = !!aim && !this.contact;
+    if (aim) {
+      (this.marker.material as THREE.MeshBasicMaterial).color.setHex(inReach ? 0x8dff9e : 0xffb347);
+      this.marker.position.copy(aim.point).addScaledVector(aim.normal, 0.004);
+      this.marker.lookAt(aim.point.clone().add(aim.normal));
+    }
+    this.highlight(block, inReach);
     this.contactTime = this.contact ? this.contactTime + dt : 0;
     this.stalled = this.contact && this.trigger > 0.5 && this.rate < STALL_RATE && this.contactTime > STALL_AFTER_S;
     this.shake = this.contact ? this.trigger * (this.target!.hardness > 0.5 ? 0.006 : 0.0015) : this.trigger * 0.0005;
+  }
+
+  /** Tint the aimed-at block: green when it's in reach, amber when you need to step closer. */
+  private highlight(block: Block | null, inReach: boolean): void {
+    for (const b of this.blocks) {
+      (b.mesh.material as THREE.MeshStandardMaterial).emissive.setHex(b !== block ? 0 : inReach ? 0x1f4a26 : 0x4a3208);
+    }
   }
 
   private emitDust(p: THREE.Vector3, n: THREE.Vector3, block: Block, dt: number): void {

@@ -87,6 +87,7 @@ class Hub:
         self.sims: set[WebSocket] = set()
         self.trackers: set[WebSocket] = set()
         self.tracker_fps = 0.0
+        self.tracker_engine = ""  # "mediapipe" (on the phone) | "anyhand" (laptop GPU)
         self._tracker_last = 0.0
         self._last_state_json = ""
         self._last_motor_send = 0.0
@@ -105,6 +106,10 @@ class Hub:
 
     # ================================================================ lifecycle
     async def start(self) -> None:
+        if self.settings.xai_api_key:
+            log.info("XAI_API_KEY loaded: Grok Voice (%s) and patches enabled", self.settings.voice_model)
+        else:
+            log.warning("XAI_API_KEY not set in .env: Grok Voice and patch generation disabled")
         self.sync_engine()
         loop = asyncio.get_running_loop()
         self._tasks = [loop.create_task(self._supervise(name, fn)) for name, fn in [
@@ -189,7 +194,8 @@ class Hub:
             "t": "hub.state",
             **view,
             "glove": self.transport.view(),
-            "tracker": {"connected": bool(self.trackers), "fps": round(self.tracker_fps, 1)},
+            "tracker": {"connected": bool(self.trackers), "fps": round(self.tracker_fps, 1),
+                        "engine": self.tracker_engine},
             "voice": {"configured": bool(self.settings.xai_api_key), "model": self.settings.voice_model},
             "assistant": {"backend": self.settings.assistant, "variant": self.settings.variant,
                           "auto": self.coach.enabled, "last_error": self.assistant.last_error},
@@ -389,7 +395,8 @@ class Hub:
                                  "profile_id": self.mission.profile_id,
                                  "active_equipment": self.mission.active_equipment}) + "\n")
 
-    def on_tracker_frame(self) -> None:
+    def on_tracker_frame(self, engine: str = "") -> None:
+        self.tracker_engine = engine
         now = time.monotonic()
         if self._tracker_last:
             inst = 1.0 / max(1e-3, now - self._tracker_last)
@@ -437,7 +444,7 @@ def create_app(settings: Settings, transport: GloveTransport | None = None) -> F
                 if msg.get("t") == "ping":
                     await ws.send_text(json.dumps({"t": "pong", "ts": msg.get("ts")}))
                 elif msg.get("t") == "hand.frame":
-                    hub.on_tracker_frame()
+                    hub.on_tracker_frame(str(msg.get("engine", "mediapipe"))[:20])
                     await hub._send_all(raw)  # relay verbatim to every sim
         except WebSocketDisconnect:
             pass

@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import "./style.css";
-import { DrillSystem } from "./equipment/drill";
+import { DRILL_REACH_M, DrillSystem } from "./equipment/drill";
 import { buildRoverMesh, poseRover, RoverModel } from "./equipment/rover";
+import { DEFAULT_CALIBRATION } from "./hand/gestures";
 import { TrackedHand } from "./hand/handModel";
 import { Input } from "./input/keyboard";
 import { HubClient } from "./net/hub";
@@ -97,9 +98,17 @@ async function main(): Promise<void> {
     mode = "walk";
   };
 
+  let calibrationKey = "null";
   hub.on("hub.state", (s) => {
     hubState = s;
     hud.updateState(s);
+    // a glove limits how far fingers curl, so grip only works with the wearer's saved calibration (K)
+    const cal = s.profile?.hand_calibration;
+    if (JSON.stringify(cal ?? null) !== calibrationKey) {
+      calibrationKey = JSON.stringify(cal ?? null);
+      hand.calibration = cal?.open?.length === 5 && cal.closed?.length === 5 ? structuredClone(cal)
+        : structuredClone(DEFAULT_CALIBRATION);
+    }
     if (pending && s.equipment.active === pending.equipment) enter(pending.equipment);
     if (mode !== "walk" && s.equipment.active !== mode) exitToWalk(); // signed out / switched by voice
   });
@@ -201,7 +210,11 @@ async function main(): Promise<void> {
         request(nearNow);
       }
     }
-    if (input.pressed("KeyN")) hub.action("nfc_simulate", { profile_id: input.shift() ? "okafor" : "rivera" });
+    if (input.pressed("KeyN")) {
+      const profile_id = input.shift() ? "okafor" : "rivera";
+      // a real tag the hub doesn't know yet: bind it to that astronaut (persisted in data/profiles.json)
+      hub.action(hubState?.nfc.unknown_uid ? "enroll" : "nfc_simulate", { profile_id });
+    }
     if (input.pressed("KeyH")) hub.action("ask_assistant", { question: "" });
     if (input.pressed("KeyJ")) hub.action("assistant_auto", { enabled: !(hubState?.assistant.auto ?? true) });
     if (input.pressed("KeyF")) {
@@ -276,7 +289,7 @@ async function main(): Promise<void> {
   hub.on("hub.assistant", (a) => { debug.lastAssistant = a; });
   if (import.meta.env.DEV) {
     (window as any).__lh = {
-      walker, rover, drill, terrain, site, debug,
+      walker, rover, drill, hand, terrain, site, debug,
       get mode() { return mode; },
       get hubState() { return hubState; },
       aimAt(x: number, y: number, z: number) {
@@ -356,14 +369,15 @@ async function main(): Promise<void> {
     }
     camera.updateMatrixWorld();
 
-    // drill: held in the tracked hand (aims where the bit points) or at a fixed anchor (aims at the crosshair)
+    // drill: held in the tracked hand or at a fixed anchor. Either way it aims from the eye, through the point just
+    // above the fist (tracked) or through the crosshair, and the bit turns toward whatever that ray finds
     const useHand = hand.active && mode === "drill";
-    const anchor = useHand ? hand.palm : handAnchor;
     const anchorWorld = new THREE.Object3D();
-    anchor.getWorldPosition(anchorWorld.position);
-    anchor.getWorldQuaternion(anchorWorld.quaternion);
-    const aimDir = new THREE.Vector3(0, 0, -1).applyQuaternion(useHand ? anchorWorld.quaternion : camera.quaternion);
-    const aimOrigin = useHand ? anchorWorld.position : camera.position;
+    (useHand ? hand.toolMount : handAnchor).getWorldPosition(anchorWorld.position);
+    camera.getWorldQuaternion(anchorWorld.quaternion);
+    const aimOrigin = camera.position;
+    const aimDir = useHand ? hand.sight.getWorldPosition(new THREE.Vector3()).sub(aimOrigin).normalize()
+      : new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
     const push = input.held("KeyW") || (useHand && hand.push > 0.05) ? 1 : 0;
     drill.update(dt, anchorWorld, aimOrigin, aimDir, push);
 
@@ -371,13 +385,20 @@ async function main(): Promise<void> {
     const n = near();
     const authorized = hubState?.equipment.authorized ?? [];
     if (mode === "walk" && n) {
-      hud.setPrompt(!hubState?.profile ? `Tap glove to identify (N) · ${n.toUpperCase()}`
-        : !authorized.includes(n) ? `Tap glove to authorize ${n.toUpperCase()}`
+      hud.setPrompt(hubState?.nfc.unknown_uid ? `Unknown glove — N to enroll it (Shift+N: crewmate) · ${n.toUpperCase()}`
+        : !hubState?.profile ? `Tap glove to identify (N) · ${n.toUpperCase()}`
+        : !authorized.includes(n) ? `Tap glove to authorize ${n.toUpperCase()} (N)`
           : n === "drill" ? "E — pick up drill" : "E — board rover");
     } else if (mode === "drill") {
-      hud.setPrompt(drill.target ? `${drill.target.label} — hold Space to drill` : "Aim at a sample · E to put the drill back");
+      hud.setPrompt(drill.target ? `${drill.target.label} — ${useHand ? "curl your index finger" : "hold Space"} to drill`
+        : drill.tooFar ? `${drill.tooFar.label} — step ${Math.max(0.1, drill.aimDistance - DRILL_REACH_M).toFixed(1)} m closer`
+        : `${useHand ? "Hold your fist just below a sample" : "Aim at a sample"} · E to put the drill back`);
     } else hud.setPrompt(null);
-    hud.setCrosshair(mode !== "rover");
+    if (mode === "drill") {
+      // the reticle sits where the bit points, so it follows the hand and snaps onto a sample the aim assist picks
+      const s = drill.aimPoint.clone().project(camera);
+      hud.setCrosshair(true, (s.x + 1) / 2, (1 - s.y) / 2, drill.target ? "lock" : drill.tooFar ? "far" : "");
+    } else hud.setCrosshair(mode !== "rover");
     hud.setSpeedo(mode === "rover", Math.abs(rover.v) * 3.6, rover.rough,
       THREE.MathUtils.radToDeg(rover.pitch), THREE.MathUtils.radToDeg(rover.roll));
 

@@ -4,19 +4,28 @@ import * as THREE from "three";
 import type { HandFrame } from "../net/messages";
 import { CHAINS, DEFAULT_CALIBRATION, GestureState, normalizedCurls, palmRollDeg, rawCurls, TIPS,
   type CurlCalibration } from "./gestures";
-import { OneEuroPoints } from "./oneEuro";
+import { OneEuro, OneEuroPoints } from "./oneEuro";
 
 const PHONE_HFOV_DEG = 65; // approx. iPhone main camera horizontal FOV at 4:3
 const HAND_LENGTH_M = 0.09; // wrist -> middle MCP, used for depth from apparent size
 const MIN_DEPTH = 0.28, MAX_DEPTH = 0.65;
 const STALE_S = 0.5;
+const SIGHT_RAISE_M = 0.09; // the aim passes just above the fist, so the glove and drill don't hide what you aim at
+const TOOL_MOUNT = new THREE.Vector3(0, -0.11, -0.06); // a held tool hangs below the fist (top handle), clear of the sight
 
 export class TrackedHand {
   readonly group = new THREE.Group();
-  readonly palm = new THREE.Object3D(); // pose for holding tools (camera space)
+  readonly palm = new THREE.Object3D(); // between wrist and middle knuckle (camera space)
+  readonly toolMount = new THREE.Object3D(); // where a held tool sits (camera space)
+  // what the hand points at is what the eye sees through this point (camera space). Where the hand *is* in the image
+  // is far steadier than which way it faces: the palm's direction rests on the tracker's noisy depth estimate.
+  readonly sight = new THREE.Object3D();
   private joints: THREE.InstancedMesh;
   private bones: THREE.InstancedMesh;
   private filter = new OneEuroPoints(1.2, 0.02);
+  // image-space hand centre (0..1): steady at rest, quick when the hand sweeps across the view
+  private centerU = new OneEuro(1.5, 4);
+  private centerV = new OneEuro(1.5, 4);
   private gestures = new GestureState();
   private lastFrame = -1e9;
   private lastDepth = 0.45;
@@ -37,7 +46,7 @@ export class TrackedHand {
     this.joints = new THREE.InstancedMesh(new THREE.SphereGeometry(0.0085, 12, 8), glove.clone(), 21);
     this.bones = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.0075, 0.0075, 1, 8), glove, 20);
     for (let i = 0; i < 21; i++) this.joints.setColorAt(i, new THREE.Color(0xf2efe8));
-    this.group.add(this.joints, this.bones, this.palm);
+    this.group.add(this.joints, this.bones, this.palm, this.toolMount, this.sight);
     this.group.visible = false;
     this.joints.frustumCulled = this.bones.frustumCulled = false;
     camera.add(this.group);
@@ -61,7 +70,8 @@ export class TrackedHand {
     this.push = Math.max(0, this.depthVel);
 
     // hand centre in the sim camera's frustum at that depth
-    const cu = f.lm.reduce((s, p) => s + p[0], 0) / 21, cv = f.lm.reduce((s, p) => s + p[1], 0) / 21;
+    const cu = this.centerU.filter(f.lm.reduce((s, p) => s + p[0], 0) / 21, t);
+    const cv = this.centerV.filter(f.lm.reduce((s, p) => s + p[1], 0) / 21, t);
     const vTan = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
     const center = new THREE.Vector3((cu - 0.5) * 2 * this.lastDepth * vTan * this.camera.aspect,
       -(cv - 0.5) * 2 * this.lastDepth * vTan, -this.lastDepth);
@@ -93,16 +103,10 @@ export class TrackedHand {
     }
     this.joints.instanceMatrix.needsUpdate = this.bones.instanceMatrix.needsUpdate = true;
 
-    // palm frame for holding tools: origin between wrist and middle MCP, forward along the fingers
-    const wrist = this.points[0], mid = this.points[9], idx = this.points[5], pinky = this.points[17];
-    const forward = new THREE.Vector3().subVectors(mid, wrist).normalize();
-    const across = new THREE.Vector3().subVectors(pinky, idx).normalize();
-    const normal = new THREE.Vector3().crossVectors(across, forward).normalize();
-    const back = forward.clone().negate();
-    const lateral = new THREE.Vector3().crossVectors(normal, back).normalize();
-    const basis = new THREE.Matrix4().makeBasis(lateral, normal, back);
-    this.palm.position.copy(wrist).lerp(mid, 0.6);
-    this.palm.quaternion.setFromRotationMatrix(basis);
+    this.palm.position.copy(this.points[0]).lerp(this.points[9], 0.6);
+    this.toolMount.position.copy(this.palm.position).add(TOOL_MOUNT);
+    this.sight.position.copy(this.palm.position);
+    this.sight.position.y += SIGHT_RAISE_M;
   }
 
   /** Light the fingertips with the live motor levels (what the glove is doing right now). */

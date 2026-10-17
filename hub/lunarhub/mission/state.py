@@ -50,7 +50,7 @@ class MissionState:
         if profile is None:
             self.unknown_uid = uid
             return Outcome(ok=False, reason="unknown_glove",
-                           toasts=[("warn", f"Unknown glove {uid[:8]}… — press Enroll to assign it")],
+                           toasts=[("warn", f"Unknown glove {uid[:8]}… — enroll it to an astronaut (see HUD)")],
                            patterns=[(patterns.denied(), f"unrecognised glove UID {uid}")])
         self.unknown_uid = None
         return self.identify(profile)
@@ -78,6 +78,8 @@ class MissionState:
     def enroll(self, profile_id: str) -> Outcome:
         if not self.unknown_uid:
             return Outcome(ok=False, reason="nothing_to_enroll", toasts=[("warn", "Scan an unknown glove first")])
+        if self.store.get(profile_id) is None:
+            return Outcome(ok=False, reason="unknown_profile", toasts=[("error", f"No astronaut '{profile_id}'")])
         profile = self.store.enroll(self.unknown_uid, profile_id)
         uid, self.unknown_uid = self.unknown_uid, None
         out = self.on_scan(uid)
@@ -114,7 +116,7 @@ class MissionState:
     def view(self) -> dict:
         p = self.profile
         return {
-            "profile": p.summary() | {"patch_url": None} if p else None,
+            "profile": p.summary() | {"patch_url": None, "hand_calibration": p.hand_calibration} if p else None,
             "equipment": {"active": self.active_equipment, "authorized": sorted(self.authorized), "near": self.near},
             "nfc": {"last_uid": self.last_uid, "unknown_uid": self.unknown_uid},
         }

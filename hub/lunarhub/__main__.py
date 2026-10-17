@@ -21,7 +21,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def main() -> None:
-    load_dotenv(ROOT / ".env")
+    # .env wins over the shell: VS Code (python.terminal.useEnvFile) injects a snapshot of .env into each new
+    # terminal, which would otherwise shadow keys added to .env after the terminal was opened.
+    load_dotenv(ROOT / ".env", override=True)
     ap = argparse.ArgumentParser(prog="lunarhub", description="LunarHaptics hub")
     ap.add_argument("--glove", default=os.getenv("GLOVE_TRANSPORT", "null"),
                     help="null | ble | ble:<name> | serial:<port>")

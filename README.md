@@ -28,6 +28,7 @@ iPhone (Safari) ──wss hand.frame──►┐
 |---|---|
 | `hub/` | Python hub (`lunarhub`): FastAPI WebSockets, haptic engine, glove transports, NFC, profiles, mission state, voice tools, patches, assistant bridge |
 | `sim/` | Vite + TypeScript + Three.js simulator (`index.html`) and phone hand tracker (`tracker.html`) |
+| `handpose/` | `lunarhand`: optional laptop-GPU hand tracker running AnyHand (WiLoR), fed JPEG frames by the phone |
 | `firmware/glove/` | ESP32 firmware (PlatformIO): BLE + serial, watchdog, kick-start, built-in patterns |
 | `agent/` | `lunar_agent`: Mission Assistant (schemas, rules, prompts, Chalk Function) and the eval harness |
 | `terrain/` | NASA LOLA processing pipeline (`build.py`) |
@@ -38,9 +39,13 @@ iPhone (Safari) ──wss hand.frame──►┐
 
 ```bash
 cp .env.example .env            # add XAI_API_KEY (voice + patches) and Chalk settings when available
+scripts/certs.sh                # once: locally-trusted HTTPS via mkcert, so the browser doesn't warn
 scripts/dev.sh                  # hub (null glove) + simulator
-# open https://localhost:5173/ (accept the self-signed cert), press ? for controls
+# open https://localhost:5173/, press ? for controls
 ```
+
+The hub reads `.env` only when it starts, so restart `dev.sh` after editing it. `dev.sh` refuses to start if
+ports 8000/5173 are still held by an old hub or simulator.
 
 Real hardware:
 
@@ -49,9 +54,14 @@ scripts/dev.sh --glove ble --nfc auto                 # or --glove serial:/dev/t
 scripts/dev.sh --glove ble --nfc auto --assistant chalk --log-telemetry
 ```
 
+NFC reader (ACR122U): run `scripts/setup_nfc.sh` once (sudo). It unloads and blacklists the kernel `pn533_usb`
+driver that grabs the reader, restarts pcscd and installs `pyscard`. New tags are unknown until enrolled: walk to
+the drill or rover in the sim, tap the tag, then press **N** (Rivera) or **Shift+N** (Okafor). The UID is saved in
+`data/profiles.json`, and later taps at a piece of equipment authorize it.
+
 Phone hand tracker: open the `tracker.html` URL printed by `dev.sh` in iPhone Safari, then tap **Start**. If Safari
-refuses the WebSocket with a self-signed cert, put mkcert certs in `sim/certs/lan.pem` + `sim/certs/lan-key.pem`
-and trust the mkcert root CA on the phone (PLAN.md §9.6).
+refuses the WebSocket, run `scripts/certs.sh` and trust the mkcert root CA on the phone (`$(mkcert -CAROOT)/rootCA.pem`;
+PLAN.md §9.6). Re-run `scripts/certs.sh` whenever the laptop's LAN IP changes.
 
 ### Controls
 
@@ -60,7 +70,7 @@ and trust the mkcert root CA on the phone (PLAN.md §9.6).
 | WASD / mouse | walk, look, drive (click to capture the mouse) |
 | E | pick up / put back drill · board / exit rover |
 | Space or right mouse | drill trigger |
-| N / Shift+N | simulate glove tap (Rivera / Okafor) when no reader is connected |
+| N / Shift+N | simulate glove tap (Rivera / Okafor); after an unknown tag is scanned, enroll it to Rivera / Okafor |
 | H · J | ask the Mission Assistant · auto-coach on/off |
 | V (hold) · T · G | talk to CAPCOM · type to CAPCOM · CAPCOM reads assistant alerts |
 | F | synthetic fine terrain detail on/off (NASA LOLA only vs LOLA + synthetic) |
@@ -68,6 +78,29 @@ and trust the mkcert root CA on the phone (PLAN.md §9.6).
 
 With the tracker running: **fist** near equipment = grab, **index curl** = drill trigger / throttle,
 **hand roll** = steer (while gripping), **open palm** = brake.
+
+Aiming the drill: the reticle marks where the bit points. With the tracker it sits just above your fist, so hold the
+fist just below a sample; otherwise it is the crosshair. It snaps onto a sample a few degrees away, turns green when
+the sample is in reach (about 2.4 m from the eye) and amber when you need to step closer, and stays locked on while you drill.
+
+### Laptop hand tracking (AnyHand)
+
+MediaPipe on the phone struggles with the gloved hand. The tracker can instead stream frames to
+[AnyHand](https://github.com/chen-si-cs/AnyHand) (WiLoR fine-tuned on synthetic hand and hand-object data) running
+on the laptop GPU. The landmarks come back in MediaPipe's format, so the sim is unchanged.
+
+```bash
+scripts/setup_anyhand.sh ~/Downloads/mano_v1_2.zip   # once: code, ~2.6 GB weights, CUDA env, MANO, self-test
+scripts/dev.sh --anyhand                             # also starts handpose on :8001 (proxied at /anyhand)
+```
+
+On the phone tracker, tap **Engine** to switch between `phone` (MediaPipe) and `laptop` (AnyHand). It falls back to
+the phone model whenever the laptop server is unavailable and reconnects by itself. The `fps` and `seen` readouts
+compare the two. Set `GLOVE_HAND=left|right` in `.env` so AnyHand tracks the gloved hand, not the bare one. Measured
+on an RTX 5060 Laptop GPU: 40 ms per frame on the server, about 23 fps and 70 ms from capture to landmarks.
+MANO needs a free account at <https://mano.is.tue.mpg.de> ("Models & Code"). Needs an NVIDIA GPU (tested on an RTX
+5060 Laptop, torch 2.11 + CUDA 12.8). AnyHand weights and WiLoR are CC-BY-NC-ND and MANO is non-commercial; all of
+it stays in the git-ignored `third_party/`.
 
 ## Hardware bring-up
 
@@ -81,8 +114,7 @@ uv run --project hub python scripts/haptic_abx.py --serial /dev/ttyUSB0 --name a
 ```
 
 Linux prep: `sudo usermod -aG dialout $USER`, `sudo apt remove brltty`, and for PC/SC NFC readers
-`sudo apt install pcscd libccid pcsc-tools` + blacklist `pn533_usb` (PLAN.md §6.1). Install NFC extras with
-`cd hub && uv sync --extra nfc`.
+`scripts/setup_nfc.sh` (installs pcscd/libccid, blacklists `pn533_usb`, runs `uv sync --extra nfc`; PLAN.md §6.1).
 
 ## How we use the sponsor tech
 
@@ -112,6 +144,7 @@ Linux prep: `sudo usermod -aG dialout $USER`, `sudo apt remove brltty`, and for 
 cd hub && uv run pytest            # protocol, haptic engine, mission/commands, xAI clients, app integration
 cd agent && uv run pytest          # rules, prompts, agent core (fake model), scorers
 cd sim && npm test                 # gestures, One Euro filter, rover physics stability
+cd handpose && uv run pytest       # AnyHand landmark conversion, MANO chumpy stripping, frame protocol
 g++ -std=c++17 -I firmware/glove/src firmware/glove/test/host_protocol_test.cpp -o /tmp/p && /tmp/p < vectors.hex
 ```
 

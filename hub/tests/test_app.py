@@ -75,6 +75,26 @@ def test_scan_drill_and_haptics_end_to_end(env):
         assert pkt and pkt[0].type in (gp.PacketType.FRAME, gp.PacketType.PING)
 
 
+def test_unknown_tag_enrolled_at_drill_authorizes_it(env):
+    client, _, hub = env
+    with client.websocket_connect("/ws/sim") as ws:
+        ws.receive_text()
+        ws.send_text(json.dumps({"t": "sim.state", "mode": "walk", "near": "drill"}))
+        recv_until(ws, "hub.state")
+        # a real reader tap goes through NfcService.emit, same as this endpoint
+        assert client.post("/api/nfc/scan", json={"uid": "04:A2:24:5A:6B:12:90"}).json()["ok"]
+        assert "Unknown glove" in recv_until(ws, "hub.toast")["text"]
+        state = recv_until(ws, "hub.state")
+        assert state["nfc"]["unknown_uid"] == "04A2245A6B1290" and state["profile"] is None
+        # the sim sends this when N is pressed while an unknown tag is pending
+        ws.send_text(json.dumps({"t": "ui.action", "action": "enroll", "args": {"profile_id": "rivera"}}))
+        state = recv_until(ws, "hub.state")
+        assert state["profile"]["id"] == "rivera" and state["nfc"]["unknown_uid"] is None
+        assert state["equipment"]["authorized"] == ["drill"] and state["equipment"]["active"] == "drill"
+    assert hub.store.by_uid("04A2245A6B1290").id == "rivera"
+    assert "04A2245A6B1290" in (hub.settings.data_dir / "profiles.json").read_text()
+
+
 def test_voice_tool_call_round_trip(env):
     client, _, _ = env
     with client.websocket_connect("/ws/sim") as ws:
@@ -111,13 +131,14 @@ def test_assistant_local_fallback(env):
 
 
 def test_tracker_relay(env):
-    client, _, _ = env
+    client, _, hub = env
     with client.websocket_connect("/ws/sim") as sim, client.websocket_connect("/ws/tracker") as tracker:
         sim.receive_text()
         tracker.send_text(json.dumps({"t": "ping", "ts": 1}))
         assert json.loads(tracker.receive_text())["t"] == "pong"
-        tracker.send_text(json.dumps({"t": "hand.frame", "ts": 1, "lm": [[0, 0, 0]] * 21}))
+        tracker.send_text(json.dumps({"t": "hand.frame", "ts": 1, "lm": [[0, 0, 0]] * 21, "engine": "anyhand"}))
         assert recv_until(sim, "hand.frame")["lm"][0] == [0, 0, 0]
+        assert hub.state_view()["tracker"]["engine"] == "anyhand"
 
 
 def test_agent_vocabulary_is_in_sync():

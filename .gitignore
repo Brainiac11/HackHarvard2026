@@ -9,8 +9,9 @@ __pycache__/
 node_modules/
 sim/dist/
 
-# Secrets
+# Secrets (incl. mkcert keys from scripts/certs.sh)
 .env
+sim/certs/
 
 # Raw NASA downloads (processed outputs in sim/public/terrain are committed)
 terrain/raw/
@@ -25,3 +26,6 @@ data/sessions/*.jsonl
 .vscode/
 .cursor/
 .DS_Store
+
+# AnyHand / WiLoR checkout, weights and MANO (CC-BY-NC-ND + MANO licence: not redistributed; scripts/setup_anyhand.sh)
+third_party/

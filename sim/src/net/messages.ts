@@ -35,6 +35,7 @@ export interface ProfileSummary {
     warning_intensity: number; gain: number;
   };
   patch_url?: string; patch_source?: string;
+  hand_calibration?: { open: number[]; closed: number[] } | null; // saved with K (curl range in the glove)
 }
 
 export interface HubState {
@@ -43,7 +44,7 @@ export interface HubState {
   equipment: { active: Equipment | null; authorized: Equipment[]; near: Equipment | null };
   nfc: { last_uid: string | null; unknown_uid: string | null; backend: string; reader: string; error: string };
   glove: { transport: string; connected: boolean; rtt_ms: number | null; detail: string };
-  tracker: { connected: boolean; fps: number };
+  tracker: { connected: boolean; fps: number; engine: string };
   voice: { configured: boolean; model: string };
   assistant: { backend: string; variant: string; auto: boolean; last_error: string };
   profiles: { id: string; name: string; callsign: string; has_tag: boolean }[];

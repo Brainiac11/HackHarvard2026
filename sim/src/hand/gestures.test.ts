@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GestureState, normalizedCurls, palmRollDeg, rawCurls } from "./gestures";
+import { GestureState, HandednessFilter, normalizedCurls, palmRollDeg, rawCurls } from "./gestures";
 import { OneEuro } from "./oneEuro";
 
 /** Synthetic world landmarks: each finger continues along its metacarpal and curls toward the palm (+z). */
@@ -65,6 +65,24 @@ describe("gestures", () => {
   it("palm roll tracks rotation", () => {
     expect(Math.abs(palmRollDeg(OPEN, "Right"))).toBeLessThan(1);
     expect(palmRollDeg(hand([0, 0, 0, 0, 0], 0.5), "Right")).toBeCloseTo(28.6, 0);
+  });
+  it("a glove-limited fist grips only with the wearer's calibration", () => {
+    const gloveFist = hand([0.3, 0.55, 0.55, 0.55, 0.55]); // thick glove: fingers stop about half way
+    expect(new GestureState().update(normalizedCurls(gloveFist), 0).grip).toBe(false);
+    const cal = { open: rawCurls(OPEN).map((c) => c + 0.1), closed: rawCurls(gloveFist) };
+    expect(new GestureState().update(normalizedCurls(gloveFist, cal), 0).grip).toBe(true);
+  });
+});
+
+describe("HandednessFilter", () => {
+  it("ignores brief Left/Right flips and follows a sustained change", () => {
+    const h = new HandednessFilter(3);
+    expect(h.update("Right")).toBe("Right");
+    expect(h.update("Left")).toBe("Right");
+    expect(h.update("Left")).toBe("Right");
+    expect(h.update("Right")).toBe("Right"); // streak broken
+    ["Left", "Left"].forEach((l) => expect(h.update(l)).toBe("Right"));
+    expect(h.update("Left")).toBe("Left");
   });
 });
 
