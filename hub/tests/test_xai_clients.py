@@ -8,6 +8,7 @@ from PIL import Image
 
 from lunarhub.imagine import patches
 from lunarhub.profiles.store import PatchSpec, Profile
+from lunarhub.voice.session import session_config
 from lunarhub.voice.token import VoiceTokenError, mint_token, normalize_token_response
 
 
@@ -52,6 +53,20 @@ async def test_mint_token_sends_ttl_and_auth():
 async def test_mint_token_requires_key():
     with pytest.raises(VoiceTokenError):
         await mint_token("")
+
+
+def test_session_config_is_the_shape_xai_accepted():
+    """The session.update the browser sends, as wss://api.x.ai/v1/realtime accepted it on 2026-10-17 (session.updated,
+    then a push-to-talk turn with a transcript, a tool call and audio)."""
+    cfg = session_config("grok-voice-latest", "eve")
+    assert cfg["url"] == "wss://api.x.ai/v1/realtime?model=grok-voice-latest"
+    s = cfg["session"]
+    assert s["turn_detection"] is None and s["voice"] == "eve" and s["reasoning"] == {"effort": "none"}
+    pcm24k = {"type": "audio/pcm", "rate": 24000}  # what the browser's worklet sends and its player expects
+    assert s["audio"]["input"]["format"] == pcm24k and s["audio"]["output"]["format"] == pcm24k
+    assert "CAPCOM" in s["audio"]["input"]["transcription"]["keyterms"]
+    assert all(t["type"] == "function" and t["name"] and "parameters" in t for t in s["tools"])
+    json.dumps(cfg)  # served as-is by /api/voice/config
 
 
 # ---------------------------------------------------------------- mission patches

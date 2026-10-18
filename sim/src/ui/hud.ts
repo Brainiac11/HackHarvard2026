@@ -48,6 +48,7 @@ export class Hud {
   private speedoHtml = "";
   private voice = el("div", "panel voice", this.root);
   private voiceStatus: HTMLDivElement;
+  private voiceMeter: HTMLDivElement;
   private voiceLog: HTMLDivElement;
   readonly voiceInput: HTMLInputElement;
 
@@ -68,6 +69,7 @@ export class Hud {
     this.minimapDot = el("div", "dot", box);
     this.provText = el("div", "provtext", this.prov);
     this.voiceStatus = el("div", "vstatus", this.voice, "CAPCOM · offline (hold V to talk)");
+    this.voiceMeter = el("div", "vmeter hidden", this.voice);
     this.voiceLog = el("div", "vlog", this.voice);
     this.voiceInput = el("input", "vinput hidden", this.voice) as HTMLInputElement;
     this.voiceInput.placeholder = "Type to CAPCOM, Enter to send, Esc to cancel";
@@ -87,6 +89,13 @@ export class Hud {
   setVoiceStatus(status: string, detail = ""): void {
     this.voiceStatus.className = `vstatus ${status}`;
     this.voiceStatus.textContent = `CAPCOM · ${status}${detail ? ` (${detail})` : ""}`;
+  }
+
+  /** The mic level while V is held (peak 0..1, drawn on a -60..0 dBFS scale), or null to hide the meter. */
+  setVoiceLevel(peak: number | null): void {
+    this.voiceMeter.classList.toggle("hidden", peak === null);
+    const pct = peak ? Math.max(0, Math.min(100, (20 * Math.log10(peak) + 60) / 0.6)) : 0;
+    this.voiceMeter.style.setProperty("--level", `${pct.toFixed(0)}%`);
   }
 
   addTranscript(role: string, text: string): void {

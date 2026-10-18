@@ -218,6 +218,7 @@ async function main(): Promise<void> {
   const voice = new GrokVoice(hub);
   let speakAlerts = false;
   voice.onStatus = (s, detail) => hud.setVoiceStatus(s, detail);
+  voice.onLevel = (peak) => hud.setVoiceLevel(peak);
   voice.onTranscript = (role, text) => {
     hud.addTranscript(role, text);
     if (role !== "tool") hub.send({ t: "voice.transcript", role, text });
@@ -231,6 +232,11 @@ async function main(): Promise<void> {
       voice.speak(`${a.advice.explanation} ${a.advice.action}`);
     }
   });
+  // push-to-talk follows the key events, not the frame loop: a frame longer than the press (a hitch, a slow GPU) lost
+  // the release and left the mic streaming in "listening"; the keydown is also the gesture that lets audio start
+  addEventListener("keydown", (e) => { if (e.code === "KeyV" && !e.repeat && !input.typing) void voice.pttDown(); });
+  addEventListener("keyup", (e) => { if (e.code === "KeyV") void voice.pttUp(); });
+  addEventListener("blur", () => void voice.pttUp());
   const textBox = hud.voiceInput;
   textBox.addEventListener("focus", () => (input.typing = true));
   textBox.addEventListener("blur", () => { input.typing = false; textBox.classList.add("hidden"); });
@@ -289,9 +295,6 @@ async function main(): Promise<void> {
       env.setShadowMapSize(SHADOW_TEXELS[post.quality]);
     }
     if (input.pressed("KeyK")) calibrateHand();
-    if (input.pressed("KeyV")) voice.pttDown();
-    if (voiceHeld && !input.held("KeyV")) voice.pttUp();
-    voiceHeld = input.held("KeyV");
     if (input.pressed("KeyT")) {
       document.exitPointerLock();
       textBox.classList.remove("hidden");
@@ -395,7 +398,6 @@ async function main(): Promise<void> {
   let physicsAcc = 0, telemetryAcc = 0, provAcc = 0;
   const camTmp = new THREE.Vector3();
   let prevGrip = false;
-  let voiceHeld = false;
   const roverFocus = new THREE.Vector3();
   // last frame: draw calls and primitives over every pass; CPU ms (smoothed) for the whole frame() and its parts
   const frameStats = { calls: 0, triangles: 0, points: 0, lines: 0, frameCpuMs: 0, worldCpuMs: 0, renderCpuMs: 0 };

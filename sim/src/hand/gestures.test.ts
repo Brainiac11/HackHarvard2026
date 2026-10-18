@@ -67,14 +67,21 @@ describe("gestures", () => {
     const g = new GestureState();
     expect(g.update(normalizedCurls(FIST), 0)).toMatchObject({ pose: "fist", grip: true });
     expect(g.update(normalizedCurls(FIST), 0).closure).toBeGreaterThan(0.95);
-    const half = normalizedCurls(hand([0, 0.4, 0.4, 0.4, 0.4])); // between a fist and an open hand
+    const half = normalizedCurls(hand([0, 0.5, 0.5, 0.5, 0.5])); // between a fist and an open hand (~0.42-0.44)
     expect(g.update(half, 0.1).pose).toBe("neutral");
+    expect(g.update(half, 0.4).pose).toBe("neutral");
     const thumbIn = normalizedCurls(hand([0.6, 0, 0, 0, 0])); // open fingers, thumb tucked (stiff glove)
-    g.update(thumbIn, 0.2);
-    expect(g.update(thumbIn, 0.4)).toMatchObject({ pose: "open", openPalm: true });
-    expect(g.update(thumbIn, 0.4).closure).toBeLessThan(0.05);
-    expect(g.update(half, 0.5).pose).toBe("open"); // relaxing part way stays open (hysteresis)
-    expect(g.update(normalizedCurls(FIST), 0.6).pose).toBe("fist");
+    g.update(thumbIn, 0.5);
+    expect(g.update(thumbIn, 0.7)).toMatchObject({ pose: "open", openPalm: true });
+    expect(g.update(thumbIn, 0.7).closure).toBeLessThan(0.05);
+    expect(g.update(half, 0.8).pose).toBe("open"); // relaxing part way stays open (hysteresis)
+    expect(g.update(normalizedCurls(FIST), 0.9).pose).toBe("fist");
+  });
+  it("a relaxed, slightly curled glove hand still counts as open", () => {
+    const relaxed = normalizedCurls(hand([0.3, 0.4, 0.4, 0.4, 0.4])); // fingers ~0.31-0.33 of the way to a fist
+    const g = new GestureState();
+    g.update(relaxed, 0);
+    expect(g.update(relaxed, 0.2)).toMatchObject({ pose: "open", openPalm: true });
   });
   it("palm roll tracks rotation", () => {
     expect(Math.abs(palmRollDeg(OPEN, "Right"))).toBeLessThan(1);

@@ -34,37 +34,59 @@ export function toBase64(buf: ArrayBuffer): string {
   return btoa(s);
 }
 
+/** Peak |sample| of a PCM16 chunk, 0..1. */
+export function peakOf(pcm: Int16Array): number {
+  let m = 0;
+  for (let i = 0; i < pcm.length; i++) m = Math.max(m, Math.abs(pcm[i]));
+  return m / 32768;
+}
+
 export class Mic {
   private ctx: AudioContext | null = null;
   private node: AudioWorkletNode | null = null;
+  private stream: MediaStream | null = null;
   private opening: Promise<void> | null = null;
   private flushed: (() => void)[] = [];
-  onChunk: (b64: string) => void = () => {};
+  onChunk: (b64: string, peak: number) => void = () => {};
 
   start(): Promise<void> {
-    this.opening ??= this.open().catch((e) => { this.opening = null; throw e; });
+    this.opening ??= this.open().catch((e) => { this.close(); throw e; });
     return this.opening;
   }
 
   private async open(): Promise<void> {
-    const stream = await navigator.mediaDevices.getUserMedia({
+    if (!navigator.mediaDevices) throw new Error("needs the https:// page (browsers hide the mic over plain http)");
+    // created before the first await, i.e. inside the V key's user gesture, so the autoplay policy lets it run
+    const ctx = this.ctx = new AudioContext();
+    const stream = this.stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
     });
-    this.ctx = new AudioContext();
+    // device unplugged or the audio server restarted: reopen on the next press instead of streaming a dead track
+    stream.getAudioTracks().forEach((t) => t.addEventListener("ended", () => { if (this.stream === stream) this.close(); }));
     const url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
-    await this.ctx.audioWorklet.addModule(url);
-    this.node = new AudioWorkletNode(this.ctx, "pcm-capture");
-    this.node.port.onmessage = (e) => {
+    await ctx.audioWorklet.addModule(url);
+    const node = new AudioWorkletNode(ctx, "pcm-capture");
+    node.port.onmessage = (e) => {
       if (e.data === "flushed") this.flushed.splice(0).forEach((r) => r());
-      else this.onChunk(toBase64(e.data as ArrayBuffer));
+      else this.onChunk(toBase64(e.data as ArrayBuffer), peakOf(new Int16Array(e.data as ArrayBuffer)));
     };
-    this.ctx.createMediaStreamSource(stream).connect(this.node);
+    ctx.createMediaStreamSource(stream).connect(node);
+    this.node = node;
+  }
+
+  private close(): void {
+    this.stream?.getTracks().forEach((t) => t.stop());
+    void this.ctx?.close().catch(() => {});
+    this.ctx = this.node = this.stream = this.opening = null;
+    this.flushed.splice(0).forEach((r) => r());
   }
 
   /** Turning off resolves once the last captured samples have been delivered to onChunk. */
   async setActive(on: boolean): Promise<void> {
-    await this.ctx?.resume();
+    // resume() stays pending for as long as the browser refuses to start audio: bounded, so no turn hangs on it
+    if (this.ctx) await Promise.race([this.ctx.resume(), new Promise((r) => setTimeout(r, 1000))]);
     if (!this.node) return;
+    if (on && this.ctx?.state !== "running") throw new Error("audio is suspended by the browser: click the page, then hold V");
     const done = on ? Promise.resolve() : new Promise<void>((r) => {
       this.flushed.push(r);
       setTimeout(r, 300); // worklet gone quiet: don't hang the turn

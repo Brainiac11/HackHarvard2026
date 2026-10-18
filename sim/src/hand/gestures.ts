@@ -76,8 +76,10 @@ export function hysteresis(prev: boolean, value: number, on: number, off: number
 export type HandPose = "fist" | "open" | "neutral";
 
 // Open hand: index..pinky all straighter than OPEN_ON for OPEN_HOLD_S; it stays open until one passes OPEN_OFF.
-// The thumb is ignored: a suit glove barely lets it move, and the trackers place it least reliably.
-const OPEN_ON = 0.25, OPEN_OFF = 0.4, OPEN_HOLD_S = 0.15;
+// The thumb is ignored: a suit glove barely lets it move, and the trackers place it least reliably. OPEN_ON is
+// lenient because a relaxed gloved hand never quite flattens; it still sits below the grip's 0.45 release, so a hand
+// between the two is neutral.
+const OPEN_ON = 0.35, OPEN_OFF = 0.5, OPEN_HOLD_S = 0.15;
 
 export interface Gestures { grip: boolean; openPalm: boolean; pose: HandPose; closure: number }
 

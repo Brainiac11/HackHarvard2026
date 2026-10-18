@@ -118,6 +118,8 @@ canvas { display: block; }
 .vstatus.thinking { color: var(--info); }
 .vstatus.speaking { color: var(--ok); }
 .vstatus.ready { color: var(--ink); }
+.vmeter { height: 4px; margin-top: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+.vmeter::after { content: ""; display: block; height: 100%; width: var(--level, 0%); background: var(--ok); }
 .vlog { margin-top: 4px; max-height: 200px; overflow: hidden; font-size: 13px; }
 .vline { margin-top: 3px; }
 .vline.v-tool { color: var(--muted); font-size: 11px; font-family: ui-monospace, monospace; }
