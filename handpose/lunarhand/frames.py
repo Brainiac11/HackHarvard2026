@@ -1,7 +1,8 @@
-"""AnyHand/WiLoR output -> the landmark format the phone tracker already sends for MediaPipe (PLAN.md §9.5).
+"""WiLoR/HaMeR output -> the landmark format the phone tracker already sends for MediaPipe (PLAN.md §9.5).
 
-WiLoR's 21 keypoints use the OpenPose hand order (wrist, thumb CMC..tip, index MCP..tip, ...), which is the same
-order as MediaPipe, so the simulator's gesture code needs no changes. Pure numpy: no torch, unit-tested.
+Both models' MANO wrappers (the same code) give 21 keypoints in the OpenPose hand order (wrist, thumb CMC..tip,
+index MCP..tip, ...), which is the same order as MediaPipe, so the simulator's gesture code needs no changes. Pure
+numpy: no torch, unit-tested.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ def to_landmarks(kp3d: np.ndarray, cam_t: np.ndarray, focal: float, width: int, 
 
     Returns lm: image-normalised [x, y, z] (z = depth relative to the wrist, in units of image width, like
     MediaPipe), wlm: metres relative to the hand's centroid (MediaPipe world landmarks), and the true handedness
-    (WiLoR's detector sees the unmirrored image, unlike MediaPipe's selfie-mirrored convention).
+    (the YOLO detector sees the unmirrored image, unlike MediaPipe's selfie-mirrored convention).
     """
     cam = np.asarray(kp3d, dtype=np.float64) + np.asarray(cam_t, dtype=np.float64)[None, :]
     z = np.maximum(cam[:, 2], 1e-3)

@@ -1,7 +1,7 @@
 [project]
 name = "lunarhand"
 version = "0.1.0"
-description = "LunarHaptics laptop hand tracker: AnyHand (WiLoR) on the GPU, fed JPEG frames by the phone tracker"
+description = "LunarHaptics laptop hand tracker: WiLoR (AnyHand) or HaMeR on the GPU, fed JPEG frames by the phone tracker"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     # Blackwell GPUs (RTX 50xx) need CUDA 12.8 builds (torch >= 2.7); tested with 2.11. AnyHand pins < 2.6 only
@@ -14,7 +14,8 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "python-dotenv>=1.0",
-    # WiLoR inference dependencies (its requirements.txt minus training-only packages and chumpy)
+    # WiLoR inference dependencies (its requirements.txt minus training-only packages and chumpy); HaMeR's model
+    # package, the only part of it handpose imports, needs nothing more
     "pytorch-lightning>=2.4",
     "smplx==0.1.28",
     "yacs",

@@ -15,9 +15,9 @@ def ctx(**kw) -> ContextPacket:
     return ContextPacket.model_validate(base)
 
 
-def drill_ctx(hardness, stalled=False, contact=True, trigger=1.0, recent=(), dominant="auto", held=True):
+def drill_ctx(hardness, stalled=False, contact=True, trigger=1.0, recent=(), dominant="auto", held=True, through=False):
     return ctx(mode="drill", active_equipment="drill",
-               drill={"held": held, "trigger": trigger, "contact": contact, "hardness": hardness,
+               drill={"held": held, "trigger": trigger, "contact": contact, "hardness": hardness, "through": through,
                       "target": "hard" if hardness >= .5 else "soft", "stalled": stalled, "depth_m": 0.031,
                       "rate_mps": 0.0002 if hardness >= .5 else 0.01},
                haptics={"dominant": (("drill.hard" if hardness >= .5 else "drill.soft") if dominant == "auto"
@@ -39,6 +39,7 @@ def rover_ctx(speed=2.0, rough=0.1, slope=5.0, measured=True, err=0.6, ahead=6.0
 STALL = {"meaning": "alert.drill_stall", "layer": "alert", "cause": "drill bit not advancing", "t_ago_s": 1.0}
 SLOPE = {"meaning": "alert.slope", "layer": "alert", "cause": "LOLA slope 17.2 deg exceeds personal limit 15 deg",
          "t_ago_s": 0.5}
+BREAKTHROUGH_OLD = {"meaning": "event.breakthrough", "layer": "event", "cause": "bit broke through", "t_ago_s": 3.0}
 IMPACT_L = {"meaning": "event.impact_left", "layer": "event", "cause": "wheel impact magnitude 0.80", "t_ago_s": 0.4}
 
 CASES = [
@@ -50,6 +51,9 @@ CASES = [
     ("drill_stall", drill_ctx(0.9, stalled=True, recent=[STALL]), "drill_stall_warning", "warning"),
     ("drill_free_spin", drill_ctx(0.9, contact=False, dominant="drill.free_spin"), "drill_free_spin", "nominal"),
     ("drill_idle", drill_ctx(0.25, trigger=0.0, dominant=None), "none", "nominal"),
+    # long after the pulse the press holds the bit through the sample, spinning free, until the operator raises it
+    ("drill_breakthrough", drill_ctx(0.25, contact=False, dominant="drill.free_spin", through=True,
+                                     recent=[BREAKTHROUGH_OLD]), "drill_free_spin", "nominal"),
     ("rover_cruise", rover_ctx(), "rover_speed_rumble", "nominal"),
     ("rover_rough_fast", rover_ctx(speed=3.5, rough=0.8, dominant="rover.terrain",
                                    levels={"rover.terrain": 0.5, "rover.speed": 0.3}), "rough_terrain_both", "caution"),
@@ -65,7 +69,7 @@ def test_vocabulary_feelings_are_valid_labels():
 
 
 def test_every_rubric_situation_is_covered_by_a_case():
-    assert {c[0] for c in CASES} | {"walk", "drill_breakthrough"} == set(RUBRIC)
+    assert {c[0] for c in CASES} | {"walk"} == set(RUBRIC)
 
 
 @pytest.mark.parametrize("situation,context,feeling,hazard", CASES, ids=[c[0] for c in CASES])
@@ -126,6 +130,41 @@ def test_safety_catches_unsafe_advice_and_downgrades():
     push = AssistantAdvice(feeling="drill_stall_warning", hazard="warning", explanation="Stalled.",
                            action="Press harder to get through the basalt.")
     assert safety_problems(push, derive(stall))
+
+
+STALLED = drill_ctx(0.9, stalled=True, recent=[STALL])
+
+
+@pytest.mark.parametrize("situation,context,action,unsafe", [
+    # the hand controls: a closed fist keeps feeding a stalled bit, an open hand accelerates toward the slope
+    ("drill_stall", STALLED, "Keep your fist closed and let the bit grind through.", True),
+    ("drill_stall", STALLED, "Close your fist again and hold Space.", True),
+    ("drill_stall", STALLED, "Keep lowering until it bites.", True),
+    ("drill_stall", STALLED, "Don't keep your fist closed: open your hand.", False),
+    ("rover_slope_alert", rover_ctx(slope=17.2, recent=[SLOPE]), "Open your hand to power up the slope.", True),
+    ("rover_slope_alert", rover_ctx(slope=17.2, recent=[SLOPE]), "Use an open hand and drive up the rise.", True),
+    ("rover_slope_alert", rover_ctx(slope=17.2, recent=[SLOPE]), "Close your fist to stop; don't open your hand yet.",
+     False),
+    ("rover_slope_ahead", rover_ctx(ahead=19.0), "Open your hand to get past it quickly.", True),
+])
+def test_safety_knows_the_hand_controls(situation, context, action, unsafe):
+    d = derive(context)
+    assert d.situation == situation
+    advice = AssistantAdvice(feeling=d.feeling, hazard=d.hazard, explanation="Here.", action=action)
+    assert bool(safety_problems(advice, d)) == unsafe, action
+    # the rubric's own advice for the situation stays safe
+    assert not safety_problems(advice.model_copy(update={"action": RUBRIC[situation].guidance}), d)
+
+
+def test_free_spin_after_breakthrough_only_once_raised():
+    raised = drill_ctx(0.25, contact=False, dominant="drill.free_spin", recent=[BREAKTHROUGH_OLD])
+    assert derive(raised).situation == "drill_free_spin"
+
+
+def test_holding_a_fist_on_hard_rock_is_not_easing_off():
+    d = derive(drill_ctx(0.9))
+    assert d.situation == "drill_hard"
+    assert not any(t in "hold your fist closed and keep feeding." for t in d.action_terms)
 
 
 def test_context_is_permissive():

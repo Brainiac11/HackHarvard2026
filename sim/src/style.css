@@ -72,16 +72,26 @@ canvas { display: block; }
 .chips { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
 .chip { font-size: 11px; background: rgba(240,168,58,0.15); border: 1px solid rgba(240,168,58,0.4); border-radius: 10px; padding: 1px 7px; }
 
-.speedo { bottom: 130px; left: 50%; transform: translateX(-50%); text-align: center; min-width: 160px; }
-.speedo b { font-size: 26px; }
+/* narrow windows: stacked above the glove panel (134 px tall), the prompt above both */
+.speedo { bottom: 156px; left: 50%; transform: translateX(-50%); text-align: center; width: 150px; padding: 8px 10px; }
+.speedo b { font-size: 22px; }
+.speedo .hand { margin: 2px 0; font-weight: 600; color: var(--muted); }
+.speedo .hand.accelerate { color: var(--ok); }
+.speedo .hand.brake { color: var(--warn); }
+.speedo .hand.stall { color: var(--bad); }
+.gauge-on .prompt { bottom: 268px; }
+@media (min-width: 1280px) {
+  /* room between the provenance panel (ends at 344 px) and the glove panel: the speedo sits left of the glove panel
+     and the prompt keeps its place, so the bottom-centre HUD stays below the rover in the chase view and below the
+     console in the cockpit, down to 1280 px (a 720p projector, or 1080p at 150%) */
+  .speedo { bottom: 14px; left: auto; right: calc(50% + 138px); transform: none; }
+  .gauge-on .prompt { bottom: 150px; }
+}
 
 .prompt { position: absolute; bottom: 150px; left: 50%; transform: translateX(-50%); background: var(--panel);
   border: 1px solid var(--accent); padding: 6px 14px; border-radius: 16px; }
 .crosshair { position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; transform: translate(-50%, -50%);
   border-radius: 50%; border: 1px solid rgba(255,255,255,0.7); }
-.crosshair.lock, .crosshair.far { width: 18px; height: 18px; border-width: 2px; }
-.crosshair.lock { border-color: #8dff9e; }
-.crosshair.far { border-color: #ffb347; }
 .toasts { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column;
   gap: 6px; align-items: center; }
 .toast { background: var(--panel); border: 1px solid var(--edge); border-left: 4px solid var(--info); padding: 6px 12px;

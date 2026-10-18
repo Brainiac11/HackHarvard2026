@@ -127,9 +127,10 @@ class CommandHandler:
         if equipment == "drill":
             d = state.drill
             return {"ok": True, **common, "drill": {
-                "held": d.held, "running": d.trigger > 0.02, "trigger_pct": round(d.trigger * 100),
+                "operating": d.held, "running": d.trigger > 0.02, "spindle_pct": round(d.trigger * 100),
                 "target": d.target, "in_contact": d.contact, "depth_cm": round(d.depth_m * 100, 1),
-                "advance_rate_mm_s": round(d.rate_mps * 1000, 2), "stalled": d.stalled}}
+                "advance_rate_mm_s": round(d.rate_mps * 1000, 2), "stalled": d.stalled,
+                "broken_through": d.through}}
         if equipment == "rover":
             r = state.rover
             return {"ok": True, **common, "rover": {

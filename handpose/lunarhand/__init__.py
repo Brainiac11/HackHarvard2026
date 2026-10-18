@@ -1,1 +1,1 @@
-"""LunarHaptics laptop hand tracker (AnyHand / WiLoR)."""
+"""LunarHaptics laptop hand tracker: WiLoR or HaMeR on the GPU, via AnyHand's predictor."""

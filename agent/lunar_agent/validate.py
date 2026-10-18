@@ -60,13 +60,18 @@ def grounding_problems(advice: AssistantAdvice, ctx: ContextPacket, derived: Der
     return problems
 
 
+# the hand controls are unsafe words too: an open hand is the rover's throttle, a closed fist feeds the drill press
+OPEN_HAND = r"\bopen\w* (up )?((your|the|an?) )?hand\b"
+FIST_FEED = [r"\b(keep|hold|leave)\w*\b[^.]*\bfist\b[^.]*\b(closed|clenched|shut|tight)\b",
+             r"\b(close|make|clench|squeeze)\w* (up )?(a|your|the) fist\b", r"\bkeep (lowering|feeding|pushing)\b"]
 UNSAFE_PATTERNS = {
     "rover_slope_alert": [r"\b(climb\w*|continu\w*|keep (going|driving)|proceed\w*|carry on|head)\b[^.]*?\b(up|uphill|straight|on)\b",
                           r"\bkeep climbing\b", r"\bfull throttle\b", r"\bfloor it\b", r"\bspeed (up|it up)\b",
-                          r"\baccelerat\w*\b"],
-    "rover_slope_ahead": [r"\bspeed (up|it up)\b", r"\baccelerat\w*\b", r"\bfull throttle\b", r"\bfloor it\b"],
+                          r"\baccelerat\w*\b", OPEN_HAND],
+    "rover_slope_ahead": [r"\bspeed (up|it up)\b", r"\baccelerat\w*\b", r"\bfull throttle\b", r"\bfloor it\b",
+                          OPEN_HAND],
     "drill_stall": [r"\b(press|push)\w* harder\b", r"\bmore (force|pressure)\b",
-                    r"\b(increase|add)\w* (the )?(force|pressure|feed)\b", r"\bforce it\b"],
+                    r"\b(increase|add)\w* (the )?(force|pressure|feed)\b", r"\bforce it\b", *FIST_FEED],
 }
 NEGATIONS = re.compile(r"\b(don't|do not|never|avoid|instead of|rather than|not|no|stop|without)\b[^.]*$")
 

@@ -1,5 +1,5 @@
 // Rover: custom 4-wheel spring-damper model over the terrain (PLAN.md §9.4). Apollo-LRV-like numbers.
-// Fixed-step (120 Hz). Produces exactly the signals the haptic mappers need.
+// Fixed-step (120 Hz). Produces exactly the signals the haptic mappers need. Mesh: roverMesh.ts; controls: roverControls.ts.
 import * as THREE from "three";
 import type { Wheel } from "../net/messages";
 
@@ -136,59 +136,4 @@ export class RoverModel {
   }
 
   headingDeg(): number { return ((THREE.MathUtils.radToDeg(this.heading) % 360) + 360) % 360; }
-}
-
-export function buildRoverMesh(): { group: THREE.Group; wheels: THREE.Object3D[] } {
-  const group = new THREE.Group();
-  const metal = new THREE.MeshStandardMaterial({ color: 0xb8b2a4, roughness: 0.6, metalness: 0.5 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x2b2b2e, roughness: 0.9 });
-  const gold = new THREE.MeshStandardMaterial({ color: 0xc9a14a, roughness: 0.35, metalness: 0.8 });
-  const add = (mesh: THREE.Mesh, x: number, y: number, z: number) => {
-    mesh.position.set(x, y, z);
-    mesh.castShadow = mesh.receiveShadow = true;
-    group.add(mesh);
-    return mesh;
-  };
-  // rover forward = -z in local space
-  add(new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.12, 2.9), metal), 0, 0, 0);
-  add(new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.5, 0.5), gold), 0, 0.3, 1.1);
-  for (const sx of [-0.4, 0.4]) {
-    add(new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.08, 0.6), dark), sx, 0.35, -0.1);
-    add(new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.55, 0.08), dark), sx, 0.6, 0.2);
-  }
-  add(new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.35, 0.25), dark), 0, 0.45, -0.95); // console
-  const mast = add(new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1.2), metal), 0.6, 0.75, -1.1);
-  const dish = new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.15, 24, 1, true), gold);
-  dish.rotation.x = Math.PI / 2.3;
-  dish.position.y = 0.6;
-  mast.add(dish);
-  const wheels: THREE.Object3D[] = [];
-  const tyre = new THREE.CylinderGeometry(ROVER.wheelRadius, ROVER.wheelRadius, 0.23, 20);
-  tyre.rotateZ(Math.PI / 2);
-  for (const [f, r] of RoverModel.OFFSETS) {
-    const w = new THREE.Mesh(tyre, dark);
-    w.position.set(r, 0, -f);
-    w.castShadow = true;
-    group.add(w);
-    wheels.push(w);
-    const fender = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.04, 0.9), gold);
-    fender.position.set(r, ROVER.wheelRadius + 0.06, -f);
-    group.add(fender);
-  }
-  return { group, wheels };
-}
-
-/** Pose the rover mesh from the model (chassis + wheel heights/spin). */
-export function poseRover(group: THREE.Group, wheels: THREE.Object3D[], m: RoverModel, height: HeightFn, dt: number): void {
-  group.position.set(m.x, m.y - ROVER.restLength + 0.05, m.z);
-  group.rotation.set(0, 0, 0);
-  group.rotateY(-m.heading);
-  group.rotateX(m.pitch);
-  group.rotateZ(-m.roll);
-  wheels.forEach((w, i) => {
-    const [wx, wz] = m.wheelPos(i);
-    const groundLocal = height(wx, wz) + ROVER.wheelRadius - group.position.y;
-    w.position.y = THREE.MathUtils.clamp(groundLocal, -0.45, 0.1);
-    w.rotation.x -= (m.v / ROVER.wheelRadius) * dt;
-  });
 }

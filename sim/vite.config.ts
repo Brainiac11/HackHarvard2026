@@ -19,7 +19,7 @@ export default defineConfig({
       "/ws": { target: "ws://127.0.0.1:8000", ws: true },
       "/api": "http://127.0.0.1:8000",
       "/patches": "http://127.0.0.1:8000",
-      // AnyHand/WiLoR laptop hand tracker (handpose/, started by scripts/dev.sh --anyhand)
+      // laptop hand tracker, WiLoR or HaMeR (handpose/, started by scripts/dev.sh --anyhand or --hamer)
       "/anyhand": { target: "http://127.0.0.1:8001", ws: true },
     },
   },

@@ -1,4 +1,6 @@
 // DOM heads-up display (PLAN.md §9.7). Pure view: main.ts feeds it hub messages and sim state.
+import type { DrillReadout } from "../equipment/drill";
+import type { HandCommand } from "../equipment/roverControls";
 import type { AssistantAdvice, HubAssistant, HubState, HubToast, HubWelcome } from "../net/messages";
 
 const FINGERS = ["Thumb", "Index", "Middle", "Ring", "Pinky"];
@@ -8,6 +10,8 @@ const FEELING_ICON: Record<string, string> = {
   rough_terrain_both: "▦", wheel_impact: "✸", slope_warning: "⚠", auth_confirmation: "✓", setting_change: "⇅",
   access_denied: "⛔", none: "·",
 };
+
+const HAND_COMMAND: Record<HandCommand, string> = { accelerate: "✋ accelerate", brake: "✊ brake", coast: "coast" };
 
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
@@ -41,6 +45,7 @@ export class Hud {
   private minimapDot: HTMLDivElement;
   private provText: HTMLDivElement;
   private speedo = el("div", "panel speedo hidden", this.root);
+  private speedoHtml = "";
   private voice = el("div", "panel voice", this.root);
   private voiceStatus: HTMLDivElement;
   private voiceLog: HTMLDivElement;
@@ -68,12 +73,13 @@ export class Hud {
     this.voiceInput.placeholder = "Type to CAPCOM, Enter to send, Esc to cancel";
     this.help.innerHTML = `<h3>Controls</h3>
       <div><b>WASD</b> move / drive · <b>Mouse</b> look (click to capture) · <b>Shift</b> run / boost</div>
-      <div><b>E</b> pick up drill · enter/exit rover · <b>Space</b>/<b>RMB</b> drill trigger</div>
-      <div>Drill aim: put the reticle on a sample (tracked hand: just above your fist) · green = in reach, amber = step closer</div>
+      <div><b>E</b> operate / step away from the drill press · board / exit the rover</div>
+      <div>Drill press: <b>Space</b>/<b>S</b>/<b>RMB</b> lower the bit · <b>W</b> raise · <b>A</b>/<b>D</b> other sample · tracked hand: <b>fist</b> lower, <b>open</b> raise</div>
       <div><b>N</b> simulate glove tap, or enroll an unknown tag (Shift+N: crewmate) · <b>H</b> ask Mission Assistant · <b>J</b> auto-coach on/off</div>
       <div><b>F</b> synthetic detail on/off · <b>C</b> rover camera · <b>R</b> reset rover · <b>Q</b> reset samples</div>
+      <div>Rover: <b>W</b> throttle · <b>S</b> brake, then reverse · <b>A</b>/<b>D</b> steer (keyboard only) · tracked hand: <b>open</b> accelerate, <b>fist</b> brake</div>
       <div><b>V</b> hold to talk to CAPCOM · <b>T</b> type a command · <b>G</b> CAPCOM reads assistant alerts</div>
-      <div><b>K</b> calibrate hand (open, then fist) · <b>?</b> this help</div>`;
+      <div><b>K</b> calibrate hand (open, then fist) · <b>P</b> graphics quality · <b>?</b> this help</div>`;
   }
 
   toggleHelp(): void { this.help.classList.toggle("hidden"); }
@@ -116,7 +122,7 @@ export class Hud {
       light(s.glove.connected, `Glove ${s.glove.transport}`, s.glove.rtt_ms != null ? `${s.glove.rtt_ms} ms` : ""),
       light(s.nfc.backend === "pcsc" || s.nfc.backend === "hid" || s.nfc.backend === "serial", "NFC", s.nfc.backend),
       light(s.tracker.connected, "Tracker", s.tracker.connected
-        ? `${s.tracker.fps} fps${s.tracker.engine === "anyhand" ? " · AnyHand" : ""}` : ""),
+        ? `${s.tracker.fps} fps${({ wilor: " · WiLoR", anyhand: " · WiLoR", hamer: " · HaMeR" } as Record<string, string>)[s.tracker.engine] ?? ""}` : ""),
       light(s.voice.configured, "Grok"),
       light(!s.assistant.last_error, "Assistant", `${s.assistant.backend}${s.assistant.auto ? " · auto" : ""}`),
     ].join("");
@@ -143,9 +149,28 @@ export class Hud {
       <div class="small">Synthetic fine detail: <b>${p.detail ? "ON" : "OFF"}</b> [F] · Barker et al. 2021</div>`;
   }
 
-  setSpeedo(visible: boolean, kmh = 0, rough = 0, pitch = 0, roll = 0): void {
-    this.speedo.classList.toggle("hidden", !visible);
-    if (visible) this.speedo.innerHTML = `<b>${kmh.toFixed(1)}</b> km/h<div class="small">rough ${(rough * 100).toFixed(0)}% · pitch ${pitch.toFixed(0)}° · roll ${roll.toFixed(0)}°</div>`;
+  /** The gauge beside the glove panel (the rover's speedo, the drill press's readout), or null to hide it. */
+  private setGauge(html: string | null): void {
+    this.speedo.classList.toggle("hidden", html === null);
+    this.root.classList.toggle("gauge-on", html !== null);
+    if (html !== null && html !== this.speedoHtml) this.speedo.innerHTML = this.speedoHtml = html; // every frame
+  }
+
+  /** command: what the tracked hand is asking for (null without a tracker). */
+  setSpeedo(visible: boolean, kmh = 0, rough = 0, pitch = 0, roll = 0, command: HandCommand | null = null): void {
+    if (!visible) {
+      this.setGauge(null);
+      return;
+    }
+    const hand = command ? `<div class="hand ${command}">${HAND_COMMAND[command]}</div>` : "";
+    this.setGauge(`<b>${kmh.toFixed(1)}</b> km/h${hand}<div class="small">rough ${(rough * 100).toFixed(0)}% · pitch ${pitch.toFixed(0)}° · roll ${roll.toFixed(0)}°</div>`);
+  }
+
+  /** The drill press's bore depth, state, spindle speed and load, big enough for an audience. */
+  setDrillReadout(r: DrillReadout): void {
+    const depth = r.depthMm === null ? "--.-" : r.depthMm.toFixed(1);
+    this.setGauge(`<b>${depth}</b> mm<div class="hand ${r.stalled ? "stall" : ""}">${r.state}</div>`
+      + `<div class="small">${r.rpm} rpm · load ${Math.round(r.load * 100)}%</div>`);
   }
 
   setPrompt(text: string | null): void {
@@ -153,14 +178,7 @@ export class Hud {
     if (text) this.prompt.textContent = text;
   }
 
-  /** x, y: screen position as 0..1 fractions (the drill reticle moves). state: on a sample in reach / out of reach. */
-  setCrosshair(visible: boolean, x = 0.5, y = 0.5, state: "" | "lock" | "far" = ""): void {
-    this.crosshair.classList.toggle("hidden", !visible);
-    this.crosshair.classList.toggle("lock", state === "lock");
-    this.crosshair.classList.toggle("far", state === "far");
-    this.crosshair.style.left = `${x * 100}%`;
-    this.crosshair.style.top = `${y * 100}%`;
-  }
+  setCrosshair(visible: boolean): void { this.crosshair.classList.toggle("hidden", !visible); }
 
   toast(t: HubToast | { level: string; text: string }): void {
     const div = el("div", `toast ${t.level}`, this.toasts, t.text);

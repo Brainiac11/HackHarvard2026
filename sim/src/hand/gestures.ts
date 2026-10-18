@@ -49,8 +49,8 @@ export function palmRollDeg(w: number[][], hand: string): number {
   return d;
 }
 
-/** MediaPipe's Left/Right call is unreliable on a gloved hand and can flip frame to frame, which would flip the
- *  steering roll by 180°. Keep the current label until the other one wins `switchAfter` frames in a row. */
+/** MediaPipe's Left/Right call is unreliable on a gloved hand and can flip frame to frame, which would swap the
+ *  glove's palm and back (and flip palmRollDeg by 180°). Keep the current label until the other one wins `switchAfter` frames in a row. */
 export class HandednessFilter {
   label: string | null = null;
   private streak = 0;
@@ -72,20 +72,31 @@ export function hysteresis(prev: boolean, value: number, on: number, off: number
   return prev ? value > off : value > on;
 }
 
+/** The hand as a two-way control: closed fist, open hand, or neither (in between, or changing). */
+export type HandPose = "fist" | "open" | "neutral";
+
+// Open hand: index..pinky all straighter than OPEN_ON for OPEN_HOLD_S; it stays open until one passes OPEN_OFF.
+// The thumb is ignored: a suit glove barely lets it move, and the trackers place it least reliably.
+const OPEN_ON = 0.25, OPEN_OFF = 0.4, OPEN_HOLD_S = 0.15;
+
+export interface Gestures { grip: boolean; openPalm: boolean; pose: HandPose; closure: number }
+
 export class GestureState {
   grip = false;
   openPalm = false;
+  pose: HandPose = "neutral";
   private openSince = -1;
 
-  update(curls: number[], t: number): { grip: boolean; trigger: number; openPalm: boolean } {
+  update(curls: number[], t: number): Gestures {
     const gripValue = (curls[2] + curls[3] + curls[4]) / 3;
     this.grip = hysteresis(this.grip, gripValue, 0.65, 0.45);
-    const allOpen = curls.every((c) => c < 0.25);
-    if (allOpen) {
-      if (this.openSince < 0) this.openSince = t;
-    } else this.openSince = -1;
-    this.openPalm = allOpen && t - this.openSince >= 0.2;
-    const trigger = this.grip ? Math.min(1, Math.max(0, (curls[1] - 0.3) / 0.5)) : 0;
-    return { grip: this.grip, trigger, openPalm: this.openPalm };
+    const fingers = curls.slice(1);
+    const straight = Math.max(...fingers) < (this.openPalm ? OPEN_OFF : OPEN_ON);
+    if (!straight || this.grip) this.openSince = -1;
+    else if (this.openSince < 0) this.openSince = t;
+    this.openPalm = this.openSince >= 0 && t - this.openSince >= OPEN_HOLD_S;
+    this.pose = this.grip ? "fist" : this.openPalm ? "open" : "neutral";
+    const closure = fingers.reduce((s, c) => s + c, 0) / fingers.length; // 0 open .. 1 fist
+    return { grip: this.grip, openPalm: this.openPalm, pose: this.pose, closure };
   }
 }

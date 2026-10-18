@@ -12,7 +12,7 @@ export interface SimStateMsg {
   near: Equipment | null;
   drill: {
     held: boolean; trigger: number; target: "soft" | "hard" | null; contact: boolean;
-    hardness: number; depth_m: number; rate_mps: number; stalled: boolean;
+    hardness: number; depth_m: number; rate_mps: number; stalled: boolean; through: boolean;
   };
   rover: {
     speed: number; accel: number; throttle: number; steer: number; wheels: Wheel[];

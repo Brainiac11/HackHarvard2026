@@ -1,10 +1,11 @@
 // Phone hand tracker (PLAN.md §9.6): rear camera -> hand landmarks -> hand.frame over wss to the hub.
-// Two engines: "phone" runs MediaPipe HandLandmarker in the browser; "laptop" streams frames to AnyHand (WiLoR) on
-// the laptop GPU (handpose/), which copes better with the glove. Laptop falls back to phone while it's unavailable.
+// Engines: "phone" runs MediaPipe HandLandmarker in the browser; "wilor" and "hamer" stream frames to that model on
+// the laptop GPU (handpose/), which copes better with the glove. They fall back to phone while the laptop isn't ready.
 // Built for iPhone Safari (playsinline video, GPU->CPU delegate fallback, wake lock) but works on any browser.
 import { FilesetResolver, HandLandmarker, type HandLandmarkerResult } from "@mediapipe/tasks-vision";
 import { HandednessFilter } from "../hand/gestures";
-import { AnyHandClient, type Detection } from "./anyhand";
+import { AnyHandClient, MODEL_NAMES, type Detection, type LaptopModel } from "./anyhand";
+import { nextEngine, savedEngine } from "./engines";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const video = $<HTMLVideoElement>("video");
@@ -24,12 +25,13 @@ let rotation = Number(localStorage.getItem("lh.rotation") ?? 0); // 0 | 90 | 180
 let fpsCap = Number(localStorage.getItem("lh.fpsCap") ?? 24);
 let nextDue = 0, frames = 0, fpsWindowStart = performance.now(), fps = 0;
 let lowFpsStrikes = 0;
-let hits = 0, lastHandAt = performance.now(), lostHint = false, reconfiguring = false;
+let hits = 0, lastHandAt = performance.now(), lostHint = "", reconfiguring = false;
 const handedness = new HandednessFilter();
 
-type Engine = "phone" | "laptop";
-let engine: Engine = localStorage.getItem("lh.engine") === "laptop" ? "laptop" : "phone";
+// a saved laptop engine means "use the laptop": it starts on whichever model the laptop serves (anyhand.ts adopts it)
+let engine = savedEngine(localStorage.getItem("lh.engine"));
 const laptop = new AnyHandClient();
+let firstLaptop: LaptopModel | null = null; // the laptop's model when the phone joined it (see nextEngine)
 
 // MediaPipe's hand models are trained on bare hands. A glove (one flat colour, motors and wires on top) scores well
 // under the 0.5 defaults, so start at "glove". Lower finds gloved hands more readily but can latch onto other hands.
@@ -43,7 +45,7 @@ const confidence = (s: Sensitivity) => ({
 });
 
 function setMsg(text: string): void { $("msg").textContent = text; }
-const usingLaptop = () => engine === "laptop" && laptop.ready;
+const usingLaptop = () => engine !== "phone" && laptop.ready;
 const otherHand = (h: string) => (h === "Left" ? "Right" : "Left");
 
 // ------------------------------------------------------------------ hub connection
@@ -84,9 +86,11 @@ async function initModel(): Promise<void> {
 async function fallbackToCpu(): Promise<void> {
   if (delegate === "CPU") return;
   setMsg("GPU delegate slow — switching to CPU");
-  landmarker?.close();
-  landmarker = await createLandmarker("CPU");
+  const gpu = landmarker;
+  landmarker = null; // the loop must not run the closed GPU model while the CPU one loads
   delegate = "CPU";
+  gpu?.close();
+  landmarker = await createLandmarker("CPU");
   showEngine();
 }
 
@@ -99,17 +103,24 @@ function fromMediaPipe(r: HandLandmarkerResult): Detection | null {
 }
 
 function showEngine(): void {
-  $("engine").textContent = `Engine: ${engine}`;
-  $("delegate").textContent = usingLaptop() ? `AnyHand ${Math.round(laptop.inferMs)}/${Math.round(laptop.latencyMs)} ms`
+  $("engine").textContent = `Engine: ${engine === "phone" ? "phone" : laptop.model ? MODEL_NAMES[engine] : "laptop"}`;
+  $("delegate").textContent = usingLaptop()
+    ? `${MODEL_NAMES[laptop.serving]} ${Math.round(laptop.inferMs)}/${Math.round(laptop.latencyMs)} ms`
     : landmarker ? `MediaPipe ${delegate}` : "no model";
 }
 
 const laptopDown = () =>
-  `Laptop tracker: ${laptop.detail}. ${landmarker ? "Using the phone model meanwhile." : "No phone model to fall back on."}`;
+  `Laptop tracker: ${laptop.detail} — ${landmarker ? "using the phone model meanwhile" : "no phone model to fall back on"}.`;
 laptop.onResult = (d) => onDetection(d, performance.now());
-laptop.onStatus = (ready) => {
+laptop.onAdopt = (model) => {
+  engine = firstLaptop = model;
+  localStorage.setItem("lh.engine", engine);
   showEngine();
-  if (engine === "laptop") setMsg(ready ? "" : laptopDown());
+};
+laptop.onStatus = (ready, detail) => {
+  showEngine();
+  // ready on the other model means ours failed to load: say why
+  if (engine !== "phone") setMsg(!ready ? laptopDown() : laptop.serving !== engine ? detail : "");
 };
 
 // ------------------------------------------------------------------ geometry helpers
@@ -144,7 +155,7 @@ function send(d: Detection | null, hand: string | null): void {
     return [+x.toFixed(4), +y.toFixed(4), +p.z.toFixed(4)];
   });
   ws.send(JSON.stringify({ t: "hand.frame", ts: Date.now() / 1000, hand: hand ?? "Right",
-    score: +d.score.toFixed(3), lm, wlm, fps: +fps.toFixed(1), engine: usingLaptop() ? "anyhand" : "mediapipe" }));
+    score: +d.score.toFixed(3), lm, wlm, fps: +fps.toFixed(1), engine: usingLaptop() ? laptop.serving : "mediapipe" }));
 }
 
 function draw(d: Detection | null, hand: string | null): void {
@@ -187,10 +198,14 @@ function onDetection(d: Detection | null, now: number): void {
     fpsWindowStart = now;
     $("fps").textContent = fps.toFixed(0);
     showEngine();
-    if (now - lastHandAt > 3000 !== lostHint) {
-      lostHint = !lostHint;
-      setMsg(lostHint ? `No hand found: show the whole glove, fingers spread, in bright even light${
-        usingLaptop() || sensitivity === "max" ? "" : " (or tap Sens)"}` : "");
+    // no hand for a while: say how to get one found, or why the laptop model finds none (it fails every frame)
+    const hint = now - lastHandAt <= 3000 ? ""
+      : usingLaptop() && laptop.error ? `${MODEL_NAMES[laptop.serving]} is failing on the laptop: ${laptop.error}`
+      : `No hand found: show the whole glove, fingers spread, in bright even light${
+        usingLaptop() || sensitivity === "max" ? "" : " (or tap Sens)"}`;
+    if (hint !== lostHint) {
+      lostHint = hint;
+      setMsg(hint);
     }
     // iOS: if the GPU delegate can't sustain 12 fps for 3 s, re-create on CPU
     lowFpsStrikes = !usingLaptop() && fps < 12 ? lowFpsStrikes + 1 : 0;
@@ -262,12 +277,18 @@ $("sens").onclick = async () => {
 $("sens").textContent = `Sens: ${sensitivity}`;
 let started = false;
 $("engine").onclick = () => {
-  engine = engine === "phone" ? "laptop" : "phone";
+  const was = engine;
+  engine = nextEngine(engine, firstLaptop);
   localStorage.setItem("lh.engine", engine);
-  if (started && engine === "laptop") laptop.connect();
   if (engine === "phone") {
+    firstLaptop = null;
     laptop.close();
     setMsg("");
+  } else if (was === "phone") {
+    laptop.setModel(null); // join on the laptop's model: asking for WiLoR would unload a HaMeR that dev.sh loaded
+    if (started) laptop.connect();
+  } else {
+    laptop.setModel(engine); // already connected: the server switches models (and says "loading …" meanwhile)
   }
   showEngine();
 };
@@ -287,16 +308,16 @@ $("start").onclick = async () => {
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     started = true;
-    if (engine === "laptop") laptop.connect();
+    if (engine !== "phone") laptop.connect();
     setMsg("Loading hand model…");
     try {
       await initModel(); // also the fallback whenever the laptop engine is unavailable
     } catch (err) {
-      if (engine !== "laptop") throw err;
+      if (engine === "phone") throw err;
       console.warn("MediaPipe failed to load; laptop engine only", err); // the laptop engine doesn't need it
     }
     await requestWakeLock();
-    if (!usingLaptop()) setMsg(engine === "laptop" ? laptopDown() : "");
+    if (!usingLaptop()) setMsg(engine === "phone" ? "" : laptopDown());
     connect();
     loop();
   } catch (err) {

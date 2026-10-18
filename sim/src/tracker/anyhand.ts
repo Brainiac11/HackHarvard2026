@@ -1,12 +1,15 @@
-// Laptop hand-tracking engine: stream JPEG frames to the AnyHand (WiLoR) server in handpose/ (Vite proxies
-// /anyhand to it) and get the same 21 landmarks MediaPipe produces. Two frames in flight keep the GPU busy without
-// building a queue; the server only ever works on the newest frame.
+// Laptop hand-tracking engine: stream JPEG frames to the hand tracker in handpose/ (Vite proxies /anyhand to it),
+// which runs WiLoR or HaMeR on the laptop GPU, and get the same 21 landmarks MediaPipe produces. Two frames in flight
+// keep the GPU busy without building a queue; the server only ever works on the newest frame.
 
 export interface Point { x: number; y: number; z: number }
 /** One tracked hand from either engine. `hand` is the true handedness as seen by an unmirrored camera. */
 export interface Detection { landmarks: Point[]; world: Point[]; hand: string; score: number }
 
 interface RawHand { lm: number[][]; wlm: number[][]; hand: string; score: number }
+
+export type LaptopModel = "wilor" | "hamer";
+export const MODEL_NAMES: Record<LaptopModel, string> = { wilor: "WiLoR", hamer: "HaMeR" };
 
 const MAX_IN_FLIGHT = 2;
 const STALL_MS = 2000; // a frame unanswered this long is treated as lost
@@ -17,10 +20,16 @@ const points = (rows: number[][]): Point[] => rows.map(([x, y, z]) => ({ x, y, z
 export class AnyHandClient {
   ready = false;
   detail = "not connected";
+  // asked for (the server loads it, and may fall back to the other one), or null: whichever the server already serves,
+  // adopted from its first status
+  model: LaptopModel | null = null;
+  serving: LaptopModel = "wilor"; // what produced the latest landmarks
   latencyMs = 0; // capture -> result on the phone
   inferMs = 0; // GPU time on the laptop
+  error = ""; // why the laptop's last frame failed ("" once one succeeds)
   onResult: (d: Detection | null) => void = () => {};
   onStatus: (ready: boolean, detail: string) => void = () => {};
+  onAdopt: (model: LaptopModel) => void = () => {};
   private ws: WebSocket | null = null;
   private wanted = false;
   private nextId = 1;
@@ -31,14 +40,21 @@ export class AnyHandClient {
 
   connect(): void {
     this.wanted = true;
-    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/anyhand/ws`);
+    const query = this.model ? `?model=${this.model}` : "";
+    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/anyhand/ws${query}`);
     this.ws = ws;
     ws.onmessage = (ev) => typeof ev.data === "string" && this.handle(JSON.parse(ev.data));
     ws.onclose = (ev) => {
       if (this.ws !== ws) return;
-      this.setStatus(false, ev.reason || "offline (start it with scripts/dev.sh --anyhand)");
+      this.setStatus(false, ev.reason || "offline (start it with scripts/dev.sh --anyhand or --hamer)");
       if (this.wanted) setTimeout(() => this.wanted && this.ws === ws && this.connect(), 2000);
     };
+  }
+
+  /** Ask for `model` (the server reports "loading …", not ready, until it can serve it), or null: adopt its model. */
+  setModel(model: LaptopModel | null): void {
+    this.model = model;
+    if (model && this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ t: "anyhand.model", model }));
   }
 
   close(): void {
@@ -81,13 +97,22 @@ export class AnyHandClient {
 
   private handle(msg: any): void {
     if (msg.t === "anyhand.status") {
-      if (msg.ready) this.markDone(this.nextId - 1); // fresh server state: nothing of ours is in flight
+      if (!this.model && msg.model) {
+        this.model = msg.model; // serving it, or loading it
+        this.onAdopt(msg.model);
+      }
+      if (msg.ready) {
+        this.markDone(this.nextId - 1); // fresh server state: nothing of ours is in flight
+        this.serving = msg.model;
+      }
       this.setStatus(!!msg.ready, msg.detail ?? "");
       return;
     }
     if (msg.t !== "anyhand.result" || msg.id <= this.done) return;
     const t = this.sentAt.get(msg.id);
     this.markDone(msg.id);
+    if (msg.model) this.serving = msg.model;
+    this.error = msg.error ?? "";
     if (t !== undefined) this.latencyMs = performance.now() - t;
     this.inferMs = msg.ms ?? 0;
     const h: RawHand | undefined = msg.hands?.[0];

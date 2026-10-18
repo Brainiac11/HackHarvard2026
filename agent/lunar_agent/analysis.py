@@ -76,7 +76,8 @@ def _situation(ctx: ContextPacket) -> str:
         if any(e.meaning == "alert.drill_stall" and e.t_ago_s <= RECENT_ALERT_S for e in recent) or (
                 d.stalled and d.contact and d.trigger > 0.5):
             return "drill_stall"
-        if any(e.meaning == "event.breakthrough" and e.t_ago_s <= RECENT_EVENT_S for e in recent):
+        # the bit stays through (at overtravel, out of contact) until the operator raises it, long after the pulse
+        if d.through or any(e.meaning == "event.breakthrough" and e.t_ago_s <= RECENT_EVENT_S for e in recent):
             return "drill_breakthrough"
         if not d.held or d.trigger <= 0.02:
             return "drill_idle"

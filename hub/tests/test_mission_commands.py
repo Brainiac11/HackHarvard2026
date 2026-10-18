@@ -8,7 +8,7 @@ from lunarhub.commands.handler import CommandHandler
 from lunarhub.haptics.engine import HapticEngine
 from lunarhub.mission.state import MissionState, Outcome
 from lunarhub.profiles.store import ProfileStore, normalize_uid
-from lunarhub.protocol.messages import RoverState, SimState, TerrainState
+from lunarhub.protocol.messages import DrillState, RoverState, SimState, TerrainState
 from lunarhub.terrain import TerrainGrid
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -194,6 +194,11 @@ async def test_status_tools(hub):
     rover = await h.execute("get_equipment_status", {"equipment": "rover"})
     assert rover["rover"]["speed_kmh"] == 9.0
     assert (await h.execute("get_profile", {}))["ok"] is False
+    # through a sample, the press holds the bit below it, out of contact, until it is raised
+    hub.engine.update_state(SimState(mode="drill", drill=DrillState(held=True, trigger=1, target="soft", depth_m=0.16,
+                                                                    through=True)))
+    drill = (await h.execute("get_equipment_status", {"equipment": "drill"}))["drill"]
+    assert drill["broken_through"] and not drill["in_contact"]
     if hub.terrain is not None:
         terrain = await h.execute("get_terrain_status", {})
         assert terrain["ok"] and -90 <= terrain["position"]["lat"] <= -89

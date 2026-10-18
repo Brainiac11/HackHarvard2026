@@ -27,6 +27,7 @@ class DrillState(_Model):
     depth_m: float = 0.0
     rate_mps: float = 0.0
     stalled: bool = False
+    through: bool = False  # the bit broke through the sample: it's clear below it until raised
 
 
 class Wheel(_Model):

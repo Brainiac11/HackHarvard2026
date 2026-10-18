@@ -54,6 +54,7 @@ class DrillCtx(_Ctx):
     depth_m: float = 0.0
     rate_mps: float = 0.0
     stalled: bool = False
+    through: bool = False  # broken through the sample, bit not yet raised
 
 
 class RoverCtx(_Ctx):

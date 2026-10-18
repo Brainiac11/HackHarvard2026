@@ -88,7 +88,7 @@ class Hub:
         self.sims: set[WebSocket] = set()
         self.trackers: set[WebSocket] = set()
         self.tracker_fps = 0.0
-        self.tracker_engine = ""  # "mediapipe" (on the phone) | "anyhand" (laptop GPU)
+        self.tracker_engine = ""  # "mediapipe" (on the phone) | "wilor" | "hamer" (laptop GPU); shown, never parsed
         self._tracker_last = 0.0
         self._last_state_json = ""
         self._last_motor_send = 0.0

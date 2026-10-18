@@ -3,7 +3,8 @@
 The MANO download pickles some arrays as chumpy objects, and chumpy no longer installs on current Python (its
 setup.py needs distutils and pip internals). smplx's tools/clean_ch.py fixes this but needs chumpy to run. Here a
 stub class stands in for every chumpy class while unpickling: chumpy pickles a Ch as its __dict__, with the array in
-`x`, so the arrays come out intact.
+`x`, so the arrays come out intact. The one derived object in MANO, shapedirs (a Select of 10 of the 20 stored shape
+components), is evaluated the way chumpy would.
 
     uv run --project handpose python -m lunarhand.mano third_party/AnyHand/mano_data/MANO_RIGHT.pkl
 """
@@ -33,9 +34,13 @@ class _Unpickler(pickle.Unpickler):
 
 def _plain(value):
     if isinstance(value, _ChStub):
-        if "x" not in value.__dict__:
-            raise ValueError(f"unsupported chumpy object (fields: {sorted(value.__dict__)})")
-        return np.asarray(_plain(value.x))
+        state = value.__dict__
+        if "x" in state:
+            return np.asarray(_plain(state["x"]))
+        if "a" in state and "idxs" in state:  # chumpy.reordering.Select (MANO's shapedirs: 10 of 20 components)
+            picked = np.asarray(_plain(state["a"])).ravel()[np.asarray(state["idxs"])]
+            return picked.reshape(state.get("preferred_shape") or picked.shape)
+        raise ValueError(f"unsupported chumpy object (fields: {sorted(state)})")
     if hasattr(value, "toarray"):  # scipy sparse (J_regressor): dense avoids scipy pickle-format drift
         return np.asarray(value.toarray())
     return value
