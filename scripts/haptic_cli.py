@@ -6,6 +6,12 @@
     uv run --project hub python scripts/haptic_cli.py --serial /dev/ttyUSB0 calibrate     # writes data/glove_calibration.json
     uv run --project hub python scripts/haptic_cli.py --ble ping
     uv run --project hub python scripts/haptic_cli.py --serial /dev/ttyUSB0 soak 600     # 10-min 50 Hz soak test
+    uv run --project hub python scripts/haptic_cli.py --espcmd play slope                # a hub pattern, via the engine
+
+`pattern` plays the firmware's built-in patterns (binary protocol only); `play` renders one of the hub's named
+patterns (hub/lunarhub/haptics/patterns.py TEST_PATTERNS) through the real engine and streams it at 50 Hz, on any
+link. `--espcmd` talks to the ESPcmd text-command sketch, which only understands frames: `pattern`, `ping` and
+config are dropped there.
 """
 
 from __future__ import annotations
@@ -20,14 +26,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "hub"))
 
-from lunarhub.glove.transport import BleTransport, GloveTransport, SerialTransport  # noqa: E402
+from lunarhub.glove.transport import BleTransport, EspCmdTransport, GloveTransport, SerialTransport  # noqa: E402
+from lunarhub.haptics.engine import HapticEngine  # noqa: E402
+from lunarhub.haptics.patterns import TEST_PATTERNS  # noqa: E402
 from lunarhub.protocol import glove as gp  # noqa: E402
 
 FINGERS = ["thumb", "index", "middle", "ring", "pinky"]
 
 
 async def connect(args) -> tuple[GloveTransport, asyncio.Task]:
-    transport: GloveTransport = SerialTransport(args.serial) if args.serial else BleTransport(args.ble_name)
+    transport: GloveTransport = (SerialTransport(args.serial) if args.serial else EspCmdTransport() if args.espcmd
+                                 else BleTransport(args.ble_name))
     task = asyncio.create_task(transport.run())
     for _ in range(150):
         if transport.connected:
@@ -43,6 +52,21 @@ async def hold_frame(t: GloveTransport, duty: list[int], seconds: float) -> None
         await t.send_frame(duty, 150)
         await asyncio.sleep(0.02)
     await t.send_frame([0] * 5, 150)
+
+
+async def cmd_play(t: GloveTransport, name: str, repeat: int) -> None:
+    """Render a hub pattern through the engine (perceptual curve, accents, thermal budget) like the hub does."""
+    engine = HapticEngine()
+    for i in range(repeat):
+        engine.play(TEST_PATTERNS[name]())
+        print(f"  {name} ({i + 1}/{repeat})")
+        while engine.oneshots:
+            engine.tick(0.01)
+            out = engine.tick(0.01)
+            await t.send_frame(out.duty, 150)
+            await asyncio.sleep(0.02)
+        await t.send_frame([0] * 5, 150)
+        await asyncio.sleep(0.8)
 
 
 async def cmd_sweep(t: GloveTransport, motor: int, max_duty: int, step: int) -> None:
@@ -107,10 +131,13 @@ async def main() -> None:
     link = ap.add_mutually_exclusive_group(required=True)
     link.add_argument("--serial", help="serial port, e.g. /dev/ttyUSB0")
     link.add_argument("--ble", action="store_true", help="connect over BLE")
+    link.add_argument("--espcmd", action="store_true", help="the ESPcmd text-command sketch over BLE (frames only)")
     ap.add_argument("--ble-name", default=gp.BLE_DEVICE_NAME)
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("pattern"); p.add_argument("id", type=int, help="1=double 2=triple 3=wave 4=warning")
     p.add_argument("--gain", type=int, default=255)
+    pl = sub.add_parser("play"); pl.add_argument("name", choices=sorted(TEST_PATTERNS))
+    pl.add_argument("--repeat", type=int, default=3)
     f = sub.add_parser("frame"); f.add_argument("duty", help="five comma-separated duties 0-255")
     f.add_argument("--hold", type=float, default=1.0)
     s = sub.add_parser("sweep"); s.add_argument("motor", type=int, help="0=thumb .. 4=pinky")
@@ -126,6 +153,8 @@ async def main() -> None:
         if args.cmd == "pattern":
             await t.send(gp.pattern(args.id, 0x1F, args.gain, t.next_seq()))
             await asyncio.sleep(1.0)
+        elif args.cmd == "play":
+            await cmd_play(t, args.name, args.repeat)
         elif args.cmd == "frame":
             await hold_frame(t, [int(x) for x in args.duty.split(",")], args.hold)
         elif args.cmd == "sweep":
@@ -142,6 +171,8 @@ async def main() -> None:
             await t.send_stop()
             await asyncio.sleep(0.2)
     finally:
+        if isinstance(t, EspCmdTransport):
+            await t.send_stop()  # that sketch has no watchdog: flush the stop before the writer goes away
         task.cancel()
 
 

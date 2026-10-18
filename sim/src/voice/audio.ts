@@ -41,28 +41,40 @@ export function peakOf(pcm: Int16Array): number {
   return m / 32768;
 }
 
+/**
+ * Push-to-talk microphone. The audio graph (context + worklet) is built once; each turn opens a fresh stream and
+ * releases it when the turn ends. With no deviceId the browser opens the system's default input as it is right now,
+ * so switching the input in the OS (or plugging in a headset) takes effect on the next press, without a reload; and
+ * the mic is off between turns.
+ */
 export class Mic {
   private ctx: AudioContext | null = null;
   private node: AudioWorkletNode | null = null;
   private stream: MediaStream | null = null;
+  private source: MediaStreamAudioSourceNode | null = null;
   private opening: Promise<void> | null = null;
   private flushed: (() => void)[] = [];
   onChunk: (b64: string, peak: number) => void = () => {};
 
-  start(): Promise<void> {
+  /** Name of the input this turn is recording from ("" between turns). */
+  get label(): string { return this.stream?.getAudioTracks()[0]?.label ?? ""; }
+
+  /** Builds the graph on the first press, then opens a stream on the current default input. */
+  async start(): Promise<void> {
     this.opening ??= this.open().catch((e) => { this.close(); throw e; });
-    return this.opening;
+    await this.opening;
+    try {
+      await this.attach();
+    } catch (e) {
+      this.release();
+      throw e;
+    }
   }
 
   private async open(): Promise<void> {
     if (!navigator.mediaDevices) throw new Error("needs the https:// page (browsers hide the mic over plain http)");
     // created before the first await, i.e. inside the V key's user gesture, so the autoplay policy lets it run
     const ctx = this.ctx = new AudioContext();
-    const stream = this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
-    });
-    // device unplugged or the audio server restarted: reopen on the next press instead of streaming a dead track
-    stream.getAudioTracks().forEach((t) => t.addEventListener("ended", () => { if (this.stream === stream) this.close(); }));
     const url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
     await ctx.audioWorklet.addModule(url);
     const node = new AudioWorkletNode(ctx, "pcm-capture");
@@ -70,18 +82,35 @@ export class Mic {
       if (e.data === "flushed") this.flushed.splice(0).forEach((r) => r());
       else this.onChunk(toBase64(e.data as ArrayBuffer), peakOf(new Int16Array(e.data as ArrayBuffer)));
     };
-    ctx.createMediaStreamSource(stream).connect(node);
     this.node = node;
   }
 
-  private close(): void {
+  private async attach(): Promise<void> {
+    this.release();
+    const stream = this.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+    });
+    // device unplugged or the audio server restarted mid-turn: stop feeding the worklet from a dead track
+    stream.getAudioTracks().forEach((t) => t.addEventListener("ended", () => { if (this.stream === stream) this.release(); }));
+    this.source = this.ctx!.createMediaStreamSource(stream);
+    this.source.connect(this.node!);
+  }
+
+  /** Lets go of the input device (the graph stays, ready for the next press). */
+  release(): void {
+    this.source?.disconnect();
     this.stream?.getTracks().forEach((t) => t.stop());
+    this.source = this.stream = null;
+  }
+
+  private close(): void {
+    this.release();
     void this.ctx?.close().catch(() => {});
-    this.ctx = this.node = this.stream = this.opening = null;
+    this.ctx = this.node = this.opening = null;
     this.flushed.splice(0).forEach((r) => r());
   }
 
-  /** Turning off resolves once the last captured samples have been delivered to onChunk. */
+  /** Turning off resolves once the last captured samples have been delivered to onChunk, then releases the input. */
   async setActive(on: boolean): Promise<void> {
     // resume() stays pending for as long as the browser refuses to start audio: bounded, so no turn hangs on it
     if (this.ctx) await Promise.race([this.ctx.resume(), new Promise((r) => setTimeout(r, 1000))]);
@@ -93,6 +122,7 @@ export class Mic {
     });
     this.node.port.postMessage(on ? "on" : "off");
     await done;
+    if (!on) this.release();
   }
 }
 

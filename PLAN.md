@@ -96,12 +96,12 @@ marked ⏳ need hardware, a real-GPU run, keys or accounts. ⚠ marks something 
 | Human labels: 30 questions drafted, blank for the user | ⏳ **user to answer** · ⚠ drill questions still say "trigger" | `docs/LABEL_QUESTIONS.md` |
 | Bring-up and setup tools (haptic_cli, ABX test, fake NFC, dev.sh, hotspot, certs, NFC and hand-model setup) | ✅ | `scripts/` |
 
-**Tests (2026-10-17):**
+**Tests (2026-10-18):**
 
 | Suite | Result |
 |---|---|
-| sim | 77 vitest tests in 14 files; `tsc --noEmit` clean |
-| hub | 87 |
+| sim | 98 vitest tests in 16 files; `tsc --noEmit` clean |
+| hub | 129 |
 | agent | 41 |
 | handpose | 24, no GPU needed |
 | firmware host protocol test | 7/7 vectors (2026-10-16; the vectors file is generated, not committed: §13) |
@@ -516,7 +516,7 @@ This is for the bench ESP32 running `bluetooth_ESP32/ESP32_HackHarvard.ino` unti
 - **Weaker safety than §4.1:**
   - There is no TTL or watchdog. Unchanged duties are not re-sent, and the motors hold the last command until the next one or a BLE disconnect, which stops them.
   - There is no kick-start.
-  - The only duty ceiling is the hub's `OutputCalibration.max_duty` (180 by default, or `data/glove_calibration.json`).
+  - The only duty ceiling is the hub's: `OutputCalibration.max_duty` sustained (180 by default, or `data/glove_calibration.json`), plus accents of up to 230 for at most 60 ms that the hub's thermal budget lets through (§7.1). These reach the motors unclipped here.
 
 ### 4.2 WebSocket JSON messages
 
@@ -710,7 +710,7 @@ ULN2803 GND ──► GND ── ESP32 GND   (common ground!)
 ESP32 powered from same bank via its USB port
 ```
 
-- The ULN2803 drops about 1 V, so motors see about 4 V at 100 % duty. Duty is capped at **180/255** (about 2.8 V average), which keeps 3 V motors within rating with headroom for kick pulses. Two places enforce it: the firmware's `max_duty` (`firmware/glove/`) and the hub's output curve (§7.1, `max_duty` 180). The ESPcmd sketch (§11.1) has no cap of its own and relies on the hub's.
+- The ULN2803 drops about 1 V, so motors see about 4 V at 100 % duty. Duty is capped at **180/255** (about 2.8 V average), which keeps 3 V motors within rating with headroom for kick pulses. Two places enforce it: the firmware's `max_duty` (`firmware/glove/`) and the hub's output curve (§7.1, `max_duty` 180). The hub adds short accents above it (up to 230, the kick duty, for at most 60 ms) only inside a thermal budget that keeps every motor's 0.5 s rolling average ≤ 180. `firmware/glove` clips those accents to 180. The ESPcmd sketch (§11.1) has no cap of its own and relies on the hub's.
 - PWM: LEDC, **20 kHz** (above hearing range), 8-bit resolution. Both firmwares use the same pins and PWM settings.
 
 | Finger | ESP32 classic | ESP32-S3 | ESP32-C3 |
@@ -740,7 +740,7 @@ Each step has a pass criterion. Steps 1–4 use `firmware/glove/` (binary protoc
 3. BLE: `haptic_cli.py --ble frame 0,120,0,0,0`. The index motor runs. Unplug the hub; the motor stops within 300 ms (firmware watchdog).
 4. Run a 10-minute soak at 50 Hz (`haptic_cli.py --ble soak 600`). Pass: no ESP32 resets (check the `STATUS.uptime_s` monotonic counter) and no BLE drops.
 
-ESPcmd path (`haptic_cli.py` speaks only the binary protocol):
+ESPcmd path (`haptic_cli.py --espcmd` only sends frames: `play`, `frame`, `sweep`, `calibrate` work; `pattern`, `ping` and `soak` need the binary firmware):
 
 - E1. Flash `bluetooth_ESP32/ESP32_HackHarvard.ino` from the Arduino IDE (NimBLE-Arduino library; ESP32 Arduino core 2.x or 3.x). Pass: the serial monitor (115200) prints "Waiting for laptop...".
 - E2. `uv run --project hub python bluetooth_ESP32/LaptopCode.py` finds `ESPcmd` and sends each typed line. Pass: `120` runs all five motors, `0 120 0 0 0` only the index, `0` stops. Sweep by hand for the dead zone and write `data/glove_calibration.json` (`{"min_duty": [..5..], "max_duty": 180}`) yourself.
@@ -809,7 +809,7 @@ scan(uid) ─► profile = store.by_uid(uid)
 - `near` comes from the sim: within 2.5 m of the drill press or 3.5 m of the rover (§9.2).
 - The keyboard fallback (`nfc_simulate`) calls `identify(profile)` directly, with `last_uid = "keyboard"`.
 
-**Unauthorized use:** if the sim asks to use equipment that is not in `authorized`, the hub replies `denied`. The HUD prompt shows "Tap glove to authorize DRILL (N)", the hub toast says "Tap glove at the drill to authorize it", and the glove plays a long low buzz. This makes the NFC step meaningful in the demo.
+**Unauthorized use:** if the sim asks to use equipment that is not in `authorized`, the hub replies `denied`. The HUD prompt shows "Tap glove to authorize DRILL (N)", the hub toast says "Tap glove at the drill to authorize it", and the glove plays the `denied` buzz (low, rough and stuttering). This makes the NFC step meaningful in the demo.
 
 > Security note for the Q&A: a UID is not authentication. NTAG UIDs can be cloned. A production system would use challenge-response (for example NTAG 424 DNA SUN/SDM). This matches DESIGNDOC §7.1.
 
@@ -861,21 +861,34 @@ Writes are atomic (write to a temp file, then `os.replace`). Voice and UI change
 
 ```
 sim.state ─► Mappers (drill, rover, ui) ─► Effects (per-layer 5-vectors in 0..1)
-          ─► Compositor ─► Profile shaping ─► Perceptual curve ─► Rate limiter ─► Transport
+          ─► Compositor (ducking, hush) ─► Profile shaping ─► Perceptual curve ─► Accents ─► Thermal budget ─► Transport
 ```
 
 - **Effects** are small classes with `sample(t, dt) -> np.ndarray[5]` and an `alive` flag:
-  - `Constant(level, mask)`
-  - `Hum(level, mod_hz, depth)`: steady level with gentle amplitude modulation
-  - `Abrasive(level, burst_hz, jitter, rng)`: per-motor random on/off bursts (half-period `0.5/burst_hz`, ±`jitter`) with random amplitude 0.4–1.0
+  - `Hum(level, mod_hz, depth)`: steady level with sinusoidal amplitude modulation (`depth` 0 = flat)
+  - `Abrasive(level, burst_hz, jitter, sync, rng)`: random on/off bursts (half-period `0.5/burst_hz`, ±`jitter`) with random amplitude 0.4–1.0. With `sync`, all motors switch on one shared clock, which reads as grinding jolts rather than a fizz. Keep `burst_hz` ≤ ~12: an ERM needs 30–50 ms to spin up or down.
   - `Poisson(rate_hz, amp, width_ms, mask, rng)`: sparse random spikes
-  - `Keyframes([(dur_ms, [5]), ...])`: one-shot patterns
-  - `Ripple(order, step_ms, level)`: sequential finger sweep
+  - `Keyframes([Step, ...])`: one-shot patterns. A `Step(ms, level, end, accent, hush)` ramps linearly from `level` to `end`. `accent` marks motors that may be overdriven for that step (≤ 60 ms). `hush` silences the layers below. Legacy `(dur_ms, [5])` tuples and `decay=True` still work.
+- **Pattern building blocks** (`effects.py`): a pattern is a score of `Note(at, ms, level, end, accent_ms)`s.
+  - `pulses(mask, count, on_ms, off_ms, level)` builds pulse trains. Levels can be per pulse (crescendos, sags).
+  - `sequence(masks, ms, level, gap_ms, overlap_ms)` builds sweeps, alternations and accelerating rhythms. Durations can be per note.
+  - `score(notes, lead_ms, tail_ms, hush_gaps)` renders overlapping notes into exact piecewise-linear steps. It can add a hushed silence before and after, and hush the silent gaps. All durations are multiples of the 10 ms tick.
 - **Layers and priority:** `base` (continuous) < `event` (one-shot) < `alert` (warnings).
   - Within a layer, combine with a soft sum: `1 - Π(1 - xᵢ)`.
-  - When an alert is active, other layers are **ducked to 30 %** so the warning is unmistakable.
+  - A playing one-shot **ducks** the layers below it for its whole length, gaps included: an event to **40 %**, an alert to **10 %**. Its **hushed** steps (a lead-in silence, alert gaps, a tail) mute them completely.
+  - When it ends, the ducked layers fade back in over 150 ms (`DUCK_RELEASE_S`). The end of a pattern therefore never merges into the base as an extra beat.
 - **Profile shaping:** `x · global.gain · motor_gain[i]`. The equipment-specific gain is applied inside the mapper. The `warning_gain` applies to the alert layer.
-- **Perceptual curve:** `duty = 0 if x < 0.03 else min_duty + (max_duty - min_duty) · x^0.8`, then quantized to u8. `min_duty` and `max_duty` come from `data/glove_calibration.json` (§5.4 step 2), defaulting to 70 per motor and 180.
+- **Perceptual curve:** `duty = 0 if x < 0.03 else min_duty · (max_duty / min_duty)^x`, quantized to u8.
+  - Why: an ERM's speed, and so its vibration frequency, rises with voltage, and its acceleration rises with speed². The skin's acceleration threshold is roughly flat over an ERM's ~70–200 Hz. So felt strength in dB ≈ 40·log10(duty), and equal level steps should be equal duty **ratios**: 16 dB from 70 to 180.
+  - The curve replaced `min + (max − min)·x^0.8`. Quiet levels now sit just above each motor's dead zone, and the top of the range climbs steeply.
+  - With the defaults (`min_duty` 70 per motor, `max_duty` 180): level 0.2 → 85, 0.4 → 102, 0.5 → 112, 0.6 → 123, 0.8 → 149, 1.0 → 180. Both come from `data/glove_calibration.json` (§5.4 step 2).
+- **Accents:** on motors an alert or event step marks `accent`, the hub requests `duty · 230/180` (full level → **230**, the firmware's stiction-kick duty). These are transients, at most 60 ms each, for a crisp attack: a 60 ms pulse at 180 barely reaches full ERM speed. UI patterns and continuous textures never exceed 180.
+- **Thermal budget** (`ThermalBudget`, per motor; `test_haptics.py` budget tests):
+  - **Guarantee:** over any 0.5 s window, the mean duty a motor can actually receive is ≤ 180 (`max_duty`).
+  - A frame may stay on the motor for up to 5 ticks: the hub sends every 2nd tick, and an ESPcmd write with response can take two 15 ms connection intervals. So each tick is charged the max of the last 5 duties.
+  - A duty is granted only if every window it can still reach fits, even if the motor then goes silent. Silence always fits, so the budget never wedges.
+  - Over-ceiling runs are capped at 6 ticks, followed by an equal rest. In practice the hushed lead-ins and gaps pre-pay the accents.
+  - **Where accents arrive:** the ESPcmd sketch (§4.1a) passes them through. `firmware/glove` clamps frames to its `max_duty` (180), so there they arrive as 180. That firmware still kicks at 230 for 20 ms whenever a motor starts from 0, which is exactly what the hushed silences before accents trigger. No firmware constant or sustained ceiling changed.
 - **Transport scheduler:** send a FRAME every 20 ms (50 Hz) with `ttl_ms = 150`. Skip a send if the frame is unchanged *and* the last send was < 100 ms ago (this keeps the watchdog alive). Also broadcast `hub.motors` at 20 Hz for the on-screen visualizer, which shows judges what the presenter feels.
   - **`espcmd` link (§11.1):** `send_frame` only stores the newest duty, and one writer sends it on change. The 50 Hz cadence, the TTL and the 100 ms keepalive do not reach that firmware.
   - **Shutdown:** the haptic loop is cancelled first, then STOP is sent (2 s timeout), so no frame can follow the stop.
@@ -883,19 +896,26 @@ sim.state ─► Mappers (drill, rover, ui) ─► Effects (per-layer 5-vectors 
 
 ### 7.2 Named patterns (`patterns.py`)
 
+The grammar: **alerts** last about 1 s, start from a hushed silence and carry accents. **World events** last under 0.5 s and carry accents. **UI** patterns last under 0.5 s and stay at or below 180. Steps are ≥ 40 ms, and spatial cues use coarse groups (left pair, middle, right pair, grip), because neighbouring fingers are hard to tell apart (§5.3). Levels are before the perceptual curve.
+
 | Name | Definition | Used for |
 |---|---|---|
-| `double` | all 0.9 80 ms · 0 90 ms · all 0.9 80 ms | NFC auth (profile default) |
-| `triple` | 3 × (0.9 60 ms, 0 70 ms) | Alternative auth pattern |
-| `wave` | Ripple thumb→pinky, 60 ms/step, 0.85 | Alternative auth pattern |
-| `equipment_drill` | index+middle 0.8 for 150 ms | Drill press profile active |
-| `equipment_rover` | left pair 0.8 100 ms → right pair 0.8 100 ms | Rover profile active |
-| `confirm` | middle 0.7 60 ms | Voice command accepted |
-| `setting_up` / `setting_down` | Ripple ascending/descending, 40 ms/step, 0.75 | Sensitivity changed |
-| `denied` | all 0.45 for 400 ms | Not authorized / unknown tag |
-| `warning` | 3 × (all 1.0 150 ms, 0 100 ms), alert layer | Steep slope, drill press stall |
-| `impact` | side group 1.0 → linear decay over 120 ms, gain = magnitude (0.3–1.0) | Rover bump/collision (side chosen by wheel) |
-| `breakthrough` | all 0.6 → 0 over 200 ms | Drill press bit breaks through a sample |
+| `double` | all 0.85: 70 ms on, 80 ms off, 70 ms on | NFC auth (profile default) |
+| `triple` | all 0.85: 3 × 50 ms, 60 ms gaps | Alternative auth pattern |
+| `wave` | single fingers thumb→pinky→thumb, 60 ms each starting 40 ms apart (legato), 0.8 (380 ms) | Alternative auth pattern |
+| `equipment_drill` | index+middle swell 0.3→0.85 over 240 ms, 60 ms gap, tap 0.9 for 70 ms | Drill press profile active |
+| `equipment_rover` | thumb+index and ring+pinky: 2 × (swell 0.3→0.8 over 140 ms, fall to 0.3 over 80 ms), 40 ms apart | Rover profile active |
+| `confirm` | middle 0.85 for 70 ms | Voice command accepted |
+| `setting_up` / `setting_down` | single-finger ripple thumb→pinky growing 0.45→0.95 / pinky→thumb fading 0.95→0.45, 70 ms each, 40 ms apart | Setting changed |
+| `denied` | all, 5 × (50 ms on, 40 ms off), sagging 0.5→0.32: low, rough and stuttering | Not authorized / unknown tag |
+| `drill_stall` (alert) | 80 ms hush; 3 × (index+middle+ring 1.0 sagging to 0.7 over 200 ms, first 60 ms accented), 120 ms hushed gaps; 100 ms hushed tail (1.02 s) | Drill press stall |
+| `slope` (alert) | 60 ms hush; thumb+index and ring+pinky take turns 10 times, 120→60 ms each (accelerating) and 0.5→1.0 (growing), first 40 ms of each accented; 80 ms tail (1.0 s) | Steep LOLA slope |
+| `impact` | 30 ms hush; side pair 1.0 for 50 ms (accented), then 0.85→0 over 150 ms; gain = magnitude (0.35–1.0, so a small knock stays under 180) | Rover bump/collision (side chosen by wheel) |
+| `breakthrough` | 40 ms hush; middle 1.0 (50 ms accent) + index/ring 0.5 for 60 ms → index/ring 0.9, middle 0.5 for 80 ms → thumb/pinky 0.8, index/ring 0.5, middle 0.2, fading to 0 over 260 ms: a punch that spreads out and fades (440 ms) | Drill press bit breaks through a sample |
+
+- `warning(meaning)` is kept for older callers. It returns `slope` for `alert.slope` and `drill_stall` otherwise.
+- `TEST_PATTERNS` (CLI `play`, the ABX test, the UI test action) names every signature: `double`, `triple`, `wave`, `warning` (= the stall rhythm), `stall`, `slope`, `breakthrough`, `impact_left`, `impact_right`, `equipment_drill`, `equipment_rover`, `confirm`, `setting_up`, `setting_down`, `denied`. The voice tool still offers the original four (§10.3).
+- `AUTH_PATTERNS` stays `double`/`triple`/`wave`, the names stored in `data/profiles.json`.
 
 ### 7.3 Drill mapper (drill press)
 
@@ -906,13 +926,15 @@ Inputs (`DrillState`, from the press telemetry, §9.3): `held`, `trigger`, `cont
 - `contact` means the bit is on the bottom of the bore, cutting or resting.
 - `through` means the bit has broken through and hangs below the sample, out of contact, until it is raised.
 
+The three textures differ in rhythm, not just level: flat, slow throb, irregular jolts.
+
 | Press situation | Effect (`hub/lunarhub/haptics/mappers.py`) |
 |---|---|
 | Nobody operating (`held` false), or spindle stopped (`trigger ≤ 0.02`, quill home) | Nothing. Stall timer reset. |
-| Spindle running, bit out of contact: lowering toward the sample, raising, holding in the air, table moving, or hanging below a broken-through sample | `drill.free_spin`: `Hum(0.15·trigger·s, 30 Hz mod, 0.1)`, a **light fast hum** |
-| In contact, soft (`h < 0.5`; regolith 0.25), cutting or resting on the bore bottom | `drill.soft`: `Hum((0.22 + 0.10·trigger)·s, 4 Hz, 0.08)`, a **gentle steady hum** (0.32 at full spindle, s = 1) |
-| In contact, hard (`h ≥ 0.5`; basalt 0.9) | `drill.hard`: steady `(0.25 + 0.35·h)·trigger·s` plus `Abrasive(level = max(0, h−0.4)·0.9·trigger·s, burst_hz = 8 + 12·h, jitter 0.5)`: **strong, gritty bursts** (basalt: 0.57 + 0.45 at 18.8 Hz) |
-| `stalled ∧ contact ∧ trigger > 0.5` for ≥ 0.8 s | Alert `warning` (`alert.drill_stall`), once per stall episode |
+| Spindle running, bit out of contact: lowering toward the sample, raising, holding in the air, table moving, or hanging below a broken-through sample | `drill.free_spin`: `Hum(0.2·trigger·s)`, flat: a **faint, smooth hum**, barely there (duty 85 at full spindle) |
+| In contact, soft (`h < 0.5`; regolith 0.25), cutting or resting on the bore bottom | `drill.soft`: `Hum((0.45 + 0.13·trigger)·s, 2 Hz, depth 0.4)`: a **gentle, slow, even throb**, 0.35–0.58 (duty 97–121) at full spindle and s = 1 |
+| In contact, hard (`h ≥ 0.5`; basalt 0.9) | `drill.hard`: steady `(0.45 + 0.3·h)·trigger·s` plus `Abrasive(level = (0.6 + 0.4·h)·trigger·s, burst_hz = 5 + 5·h, jitter 0.6, sync)`: **strong, gritty, irregular jolts** (basalt: a 0.72 floor jumping to 0.83–0.99 at ~9.5 Hz; duty 138–178, mean ~151) |
+| `stalled ∧ contact ∧ trigger > 0.5` for ≥ 0.8 s | Alert `drill_stall` (`alert.drill_stall`), once per stall episode |
 | `sim.event breakthrough` | Event `breakthrough` (only while the drill is the active equipment) |
 
 - The mapper never reads `rate`, so resting on the bore bottom (hold) feels the same as cutting the same material.
@@ -920,7 +942,9 @@ Inputs (`DrillState`, from the press telemetry, §9.3): `held`, `trigger`, `cont
 - After a breakthrough, `contact` is false, so the glove drops to free spin until the bit is raised home. `through` itself drives the assistant and HUD ("raise the bit"), not the mapper.
 - With `mapping = "resistance"`, all 5 motors are used.
 - With `mapping = "localized"`, the index and middle motors carry the signal (×1.0), the others ×0.3. This is the old "trigger fingers" mask (`TRIGGER` in `effects.py`).
-- **Target contrast check:** the mean duty for hard must be ≥ 1.6× the mean for soft, *and* hard must have temporal variance > 0. This is enforced by a unit test (`test_hard_vs_soft_contrast`).
+- **Target contrast checks** (unit tests):
+  - Free spin peaks at ≤ 90 duty. Soft's mean duty is ≥ 1.2× free spin's, and hard's is ≥ 1.4× soft's and ≥ 150 (`test_drill_spread_free_spin_soft_hard`).
+  - In level, hard's mean is ≥ 1.6× soft's, and hard is ≥ 3× rougher (mean tick-to-tick change) (`test_hard_vs_soft_contrast`).
 
 ### 7.4 Rover mapper
 
@@ -928,11 +952,11 @@ Inputs: `speed v`, `wheels[i].vel` (suspension compression velocity), `rough`, `
 
 | Channel | Effect |
 |---|---|
-| Speed rumble (all motors) | `Hum(level = a·(0.08 + 0.35·(|v|/v_max)^0.7), mod_hz = 4 + 8·|v|/v_max, depth = 0.15)`, with `v_max = 4.0 m/s`. It saturates above that, including in boost. |
-| Terrain texture | `Poisson(rate = 4 + 30·rough, amp = k·(0.25 + 0.6·rough), width = 35 ms)`, only while `rough > 0.02` and moving |
+| Speed rumble (all motors) | `Hum(level = a·(0.1 + 0.6·(|v|/v_max)^0.8), mod_hz = 4 + 6·|v|/v_max, depth = 0.3)`, with `v_max = 4.0 m/s`. A periodic rumble that grows and throbs faster: about 83 duty at 0.5 m/s (4 Hz), 94–107 at 2 m/s, 112–135 at 4 m/s (10 Hz). It saturates above that, including in boost. The top stays at 0.7 so terrain taps still stand out on it (rough ground at 4 m/s: taps ≥ 1.2× the rumble's peak, about +4 dB). |
+| Terrain texture | `Poisson(rate = 3 + 22·rough, amp = k·(0.35 + 0.65·rough), width = 45 ms)`, only while `rough > 0.02` and moving. A few taps a second on gravel, a dense rattle on boulders. |
 | Spatial split (`mapping = split`) | Left wheels (FL, RL) → thumb+index. Right wheels (FR, RR) → ring+pinky. Each side's share is its RMS compression velocity over both sides; its rate is ×(0.4 + share) and its amplitude ×min(1, 2·share). The middle finger gets no texture. `uniform`: one Poisson on all five (`rover.terrain`). |
 | Impact | The sim emits `impact {mag, side}` when a wheel's `|vel|` > 1.2 m/s at `|v|` > 0.3 m/s. The hub plays the `impact` pattern on that side, magnitude-scaled. |
-| Real-slope warning | LOLA slope under the rover > `slope_warn_deg` → `warning` (re-arms 3 s after dropping below the threshold − 2°) |
+| Real-slope warning | LOLA slope under the rover > `slope_warn_deg` → `slope` alert (re-arms 3 s after dropping below the threshold − 2°) |
 
 - `rough` is computed in the sim: the RMS over the last 0.3 s of the mean |wheel compression velocity|, normalized by 0.8 m/s and clamped to 0..1 (0 below 0.05 m/s).
 - The real-data hook is in **two places**:
@@ -946,24 +970,35 @@ Every effect the mappers create carries a **`meaning` id**. Each engine tick rec
 - the dominant meaning (the highest contribution to total duty)
 - the last 10 s of one-shot events and alerts, with their causes
 
-`hub/lunarhub/haptics/vocabulary.py` is the single source of truth. A test exports it to `agent/lunar_agent/vocabulary.json` and fails if the copy is stale.
+`hub/lunarhub/haptics/vocabulary.py` is the single source of truth. A test exports it to `agent/lunar_agent/vocabulary.json` and fails if the copy is stale. The meaning ids and `feeling` labels did not change with the new patterns (the HUD icons, the assistant rubric and the evals key on them). Only the `sensation` text did.
 
 | meaning | What the astronaut feels (sensation) | What it signals |
 |---|---|---|
-| `drill.free_spin` | Light, fast hum | Drill running, not touching material |
-| `drill.soft` | Gentle, steady hum | Bit cutting soft regolith easily |
-| `drill.hard` | Strong, gritty, irregular bursts | Bit grinding hard basalt; high resistance |
-| `alert.drill_stall` | Three strong beats | The bit has stopped advancing |
-| `event.breakthrough` | One fading pulse | Bit punched through the sample |
-| `rover.speed` | Rumble that rises and quickens with speed | Vehicle speed |
-| `rover.terrain_left` / `_right` / `rover.terrain` | Random taps on the thumb side / pinky side / across the hand (`uniform`) | Left/right/all wheels crossing bumps |
-| `event.impact_left` / `_right` | Sharp hit on one side | A wheel struck a rock or crater edge |
-| `alert.slope` | Three strong beats while driving | **Real LOLA slope** under the rover exceeds your limit |
-| `ui.auth` / `ui.equipment_*` / `ui.confirm` / `ui.setting_*` / `ui.denied` / `ui.test` | Short confirmation pulses or a ripple / a long low buzz | Identity, commands and settings feedback |
+| `drill.free_spin` | Faint, smooth, steady hum (barely there) | Drill running, not touching material |
+| `drill.soft` | Gentle hum with a slow, even throb | Bit cutting soft regolith easily |
+| `drill.hard` | Strong, gritty, irregular grinding jolts | Bit grinding hard basalt; high resistance |
+| `alert.drill_stall` | A brief silence, then three heavy, slow beats in the index, middle and ring fingers | The bit has stopped advancing |
+| `event.breakthrough` | One sharp punch in the middle finger that spreads out across the hand and fades | Bit punched through the sample |
+| `rover.speed` | Steady rumble that grows stronger and throbs faster with speed | Vehicle speed |
+| `rover.terrain_left` / `_right` / `rover.terrain` | Random taps on the thumb side / pinky side / across the hand (`uniform`), denser and stronger on rougher ground | Left/right/all wheels crossing bumps |
+| `event.impact_left` / `_right` | One sharp, hard hit on one side that dies away quickly | A wheel struck a rock or crater edge |
+| `alert.slope` | A brief silence, then a siren: the thumb side and the pinky side take turns, faster and stronger each time | **Real LOLA slope** under the rover exceeds your limit |
+| `ui.auth` | Your chosen identity pattern: two crisp pulses, three quick pulses, or a wave across the fingers and back | Glove identity accepted |
+| `ui.equipment_drill` / `ui.equipment_rover` | A swell in the index and middle fingers, then a firm tap / two rolling swells on both edges of the hand | Drill press / rover profile active |
+| `ui.confirm` / `ui.setting_up` / `ui.setting_down` | One short tap on the middle finger / a ripple thumb→pinky that grows / pinky→thumb that fades | Command accepted / setting increased / decreased |
+| `ui.denied` | A low, rough, stuttering buzz that sags | Not authorized, or the glove was not recognised |
+| `ui.test` | A demonstration of one of the patterns above | Haptic test requested |
 
-On the drill press, "drill running" means the spindle is on (§7.3). The vocabulary text did not change with the press.
+On the drill press, "drill running" means the spindle is on (§7.3).
 
-`alert.drill_stall` and `alert.slope` deliberately share the *warning* rhythm, so the astronaut only has to learn one danger signal. That makes explaining **which** danger it is valuable work for the Mission Assistant, and something the evals measure.
+**Distinctness is tested** (`test_haptics.py`):
+- Each meaning is rendered on its own: one-shots through the engine; continuous textures from their mapper in a typical situation. Auth renders all three variants, impacts at magnitudes 1.0 and 0.5, and the rover rumble at 2.5 and 0.5 m/s.
+- Features are computed on felt level (dB above the dead zone):
+  - one-shots: active motors, beat count, inter-beat tempo, duration, centroid motion (static, rightward, leftward, out-and-back, alternating, spreading), envelope (rising, falling, flat) and whether it carries an accent;
+  - continuous textures: texture (flat, periodic, irregular, sparse) and modulation tempo.
+- Every pair of meanings must differ on at least one strong axis.
+- One-shots that can meet in the same context (drill, rover or UI) must differ on two. The mirror pairs are the exception: left/right impacts and terrain taps, which differ by side.
+- The two alerts must differ on at least three. They used to share one "warning" rhythm, so the glove could only say "danger" and the Mission Assistant had to say which. Now they differ in location (grip vs both edges), rhythm (three beats vs a continuous siren), motion (static vs alternating) and envelope (flat vs growing). The astronaut can tell which danger it is before the assistant explains what to do, and the assistant's explanation is a check rather than the only source.
 
 ---
 
@@ -1331,8 +1366,8 @@ The vehicle model is custom and fixed-step at 120 Hz (`equipment/rover.ts`, unch
 | Gesture | Rule | Thresholds |
 |---|---|---|
 | Finger curl | Sum of the flexion angles along each finger chain (the thumb skips the wrist→CMC bend), normalized per finger to 0..1 using calibration | — |
-| `grip` | Mean curl of middle, ring and pinky | on > 0.65, off < 0.45 |
-| `openPalm` | Index..pinky all straighter than 0.35 for 150 ms; stays open until one passes 0.5. Lenient on purpose: a relaxed gloved hand never quite flattens, and 0.35 still sits below the grip's 0.45 release, so a hand in between is neutral. **The thumb is ignored**: a suit glove barely lets it move, and the trackers place it least reliably. Never while gripping. | 0.35 / 0.5, 150 ms |
+| `grip` | Mean curl of middle, ring and pinky | on > 0.65, off < 0.5 |
+| `openPalm` | The three straightest of index..pinky below 0.4 for 100 ms; stays open until they pass 0.55. **The most curled finger is ignored** (a suit glove keeps one bent, usually the pinky, and the trackers lose it first), and so is **the thumb**, which the glove barely lets move. 0.4 sits below the grip's 0.5 release, so a hand relaxed part way out of a fist is neutral (hold the press, coast the rover). Never while gripping. | 0.4 / 0.55, 100 ms |
 | `pose` | `fist` = grip, `open` = openPalm, otherwise `neutral`. This one control drives the press feed (§9.3), the rover throttle/brake (§9.4), and taking equipment controls (fist near authorized equipment). | — |
 | `closure` | Mean curl of index..pinky, 0 open .. 1 fist (exposed, not used by controls) | — |
 
@@ -1504,12 +1539,12 @@ Schemas: `hub/lunarhub/commands/tools.py`. Behaviour: `hub/lunarhub/commands/han
 
 | Tool | Parameters (JSON Schema) | Hub behaviour |
 |---|---|---|
-| `activate_equipment` | `equipment: enum[drill, rover]` | Requires an active profile *and* the equipment in `authorized`. Otherwise returns `{ok:false, error:"no_profile"\|"not_authorized", hint:"Ask the astronaut to tap their glove at the rover to authorize it."}` and plays `denied`. On success: `active = equipment`, plays the equipment signature (drill: a 150 ms pulse on index + middle; rover: left→right), returns `{ok:true, active_equipment}`. |
+| `activate_equipment` | `equipment: enum[drill, rover]` | Requires an active profile *and* the equipment in `authorized`. Otherwise returns `{ok:false, error:"no_profile"\|"not_authorized", hint:"Ask the astronaut to tap their glove at the rover to authorize it."}` and plays `denied`. On success: `active = equipment`, plays the equipment signature (drill: a swell then a tap on index + middle; rover: two swells on both edges of the hand, §7.2), returns `{ok:true, active_equipment}`. |
 | `adjust_haptics` | `equipment: enum[drill, rover, all]`, `setting: enum[sensitivity, vibration, terrain_sensitivity, warning_intensity, slope_warn_deg]`, `direction: enum[increase, decrease, set]`, `value?: number` | The setting decides the equipment (`SETTING_HOME`: `sensitivity`→drill, `vibration`/`terrain_sensitivity`/`slope_warn_deg`→rover, `warning_intensity`→all); a mismatched `equipment` argument is corrected, not rejected. A step is ×1.25 or ÷1.25; `slope_warn_deg` steps ±2°. Bounds (`profiles/store.py SETTING_BOUNDS`): multipliers 0.2–2.0, `slope_warn_deg` 5–30. Clamps, persists the profile, plays `setting_up`/`setting_down` (or `confirm` plus `note:"already at the allowed limit"`), returns `{old, new}`. |
 | `get_equipment_status` | `equipment?: enum[drill, rover]` (default: the active one) | Drill press: `operating` (someone is at the controls), `running` (spindle > 2 %), `spindle_pct`, `target` (soft\|hard sample under the bit), `in_contact`, `depth_cm`, `advance_rate_mm_s`, `stalled`, `broken_through`. Rover: `speed_kmh`, `reversing`, `pitch_deg`, `roll_deg`, `heading_deg`, `roughness_index`. Both include `active_equipment` and `authorized`. There is no distance or battery field, so the model can't quote one. |
 | `get_terrain_status` | — | `position{lat, lon, elevation_m}`, `here{lola_slope_deg, lola_slope_err_deg, measured}` (measured = a LOLA laser return in the cell), `ahead_50m{max_slope_deg, max_slope_err_deg, at_distance_m, steepest_measured}` (sampled from `slope.f32` along the heading), `slope_limit_deg`, `roughness_index` with `roughness_source` ("simulated fine-scale detail" or "LOLA only"), and provenance `source: "NASA LOLA 5 m/px (Barker et al. 2021)"`. |
 | `get_profile` | — | Name, callsign, auth pattern, current settings |
-| `play_haptic_test` | `pattern: enum[double, triple, wave, warning]` | Plays the pattern (useful in the demo: "show me the warning pattern") |
+| `play_haptic_test` | `pattern: enum[double, triple, wave, warning]` | Plays the pattern (useful in the demo: "show me the warning pattern"). `warning` is the drill-stall rhythm; the other signatures (§7.2 `TEST_PATTERNS`, e.g. `slope`) are only on the CLI, the ABX test and the UI test action. |
 | `ask_mission_assistant` | `question: string` | Forwards the question (capped at 500 chars) to the Mission Assistant (§10B) with the live context packet. Returns `{feeling, explanation, action, hazard, …}`, which Grok then speaks. The instructions tell CAPCOM to use this for any "what am I feeling / why / what should I do" question. |
 | `redesign_mission_patch` | `style: string (≤ 120 chars)` | Requires a profile. Regenerates the active astronaut's patch with Grok Imagine (§10A) in a background job and returns at once. The HUD updates on `hub.patch` when the image is ready. |
 
@@ -1522,10 +1557,15 @@ The command handler is **deterministic** and the only path from the voice model 
 3. **Mic** (`Mic` in `audio.ts`): `getUserMedia({audio:{echoCancellation, noiseSuppression, autoGainControl, channelCount:1}})` feeds an inline `AudioWorklet` (`PcmCapture`).
    - The worklet **resamples from the native rate to 24 kHz** (linear, carrying the previous block's last sample) and posts Int16 chunks of about 480 samples (20 ms).
    - Resampling ourselves avoids sample-rate mismatches between AudioContexts.
-4. **PTT** (hold `V`; there is no on-screen button):
-   - On press: stop playback (barge-in), open the mic and record at once. While the session is still connecting (about 1 s on the first press) the chunks are buffered locally, then sent after `input_audio_buffer.clear`.
-   - On release: wait for the worklet's last chunk, then `input_audio_buffer.commit` and `response.create`. Nothing may be appended after the commit: xAI hears it as the user talking again and drops its reply.
+   - The AudioContext and worklet are built once, on the first `V` press (inside the key's user gesture, so the autoplay policy lets audio start; a context still suspended after 1 s fails the turn with "click the page, then hold V").
+   - **A fresh stream per turn, released when the turn ends.** With no `deviceId`, the browser opens the system's default input as it is at that press, so switching the input in the OS (or plugging in a headset) applies on the next press without a reload, and the mic is off between turns. The status line names the input in use: "listening (Digital Microphone)". A track that ends mid-turn (device unplugged, audio server restarted) is released.
+   - A level meter under the CAPCOM status shows the input level (−60…0 dBFS) while `V` is held.
+4. **PTT** (hold `V`; there is no on-screen button). It follows the window's `keydown`/`keyup` (and `blur`) events directly, not the frame loop: a frame longer than the press used to lose the release and leave the mic streaming in "listening".
+   - On press: stop playback and, if a reply is in progress, send `response.cancel` (barge-in; the cancelled reply's audio and tool calls are dropped). Open the mic and record at once. While the session is still connecting (about 1 s on the first press) the chunks are buffered locally, then sent after `input_audio_buffer.clear`.
+   - On release: recording stops there, even if the session is still connecting. Wait for the worklet's last chunk, then `input_audio_buffer.commit` and `response.create`. Nothing may be appended after the commit: xAI hears it as the user talking again and drops its reply.
+   - Not sent: a hold under 300 ms ("too short: hold V while you talk") and a turn whose peak stays under −46 dBFS ("heard nothing, mic peak N dBFS"). Grok invents a reply to silence, so a muted or wrong input would otherwise look like CAPCOM ignoring you.
    - With no reply in 15 s, the status goes back to ready ("hold V to try again").
+   - **Every failure ends on a status line that says what to do** ("offline (…; hold V to retry)"): hub unreachable, token or config errors, "Grok refused the connection: check the network and xAI credits" (handshake rejected, e.g. HTTP 402), "no answer from Grok" after the 8 s timeout (the socket is closed), "microphone blocked / none found / busy" from the `getUserMedia` error, "needs the https:// page".
 5. **Playback** (`PcmPlayer` in `audio.ts`): a 24 kHz AudioContext. Each audio delta is decoded into an `AudioBuffer` and scheduled back-to-back. `drained()` resolves when the queue is empty.
 6. **Function calls:**
    - Collect `function_call_arguments.done` events (and `function_call` items in `response.done`, deduplicated by `call_id`) until `response.done`.
@@ -1883,7 +1923,7 @@ Hub side (`hub/lunarhub/glove/transport.py EspCmdTransport`, `--glove espcmd[:<n
 - `send_stop()` writes `"0 0 0 0 0"` immediately, which the hub calls first on shutdown (§12).
 - Scan by name for 5 s, reconnect forever with backoff (1, 2, 4, 5 s).
 - Tests: `hub/tests/test_glove_espcmd.py` (command fits 20 bytes, latest frame without backlog, unchanged frames not resent, stop sent immediately, disconnect noticed).
-- `haptic_cli.py` and `haptic_abx.py` only speak the binary protocol (`--serial`/`--ble`), so the soak and ABX tests need `firmware/glove`.
+- `haptic_abx.py --espcmd` and `haptic_cli.py --espcmd` (`play`, `frame`, `sweep`, `calibrate`) stream frames to this sketch. The soak test, firmware `pattern`s and `ping` need `firmware/glove`.
 - **Risk:** if the hub hangs with the link up, the last duty keeps running: nothing on the ESP32 times it out (§16).
 - The code marks `EspCmdTransport` for deletion once the glove runs firmware that speaks the binary protocol.
 
@@ -1931,7 +1971,7 @@ uv run --project hub python -m lunarhub [options]
 
 ## 13. Testing and verification
 
-Current suites (2026-10-17, all green): **hub 87** (pytest), **agent 41** (pytest), **handpose 24** (pytest), **sim 77** in 14 files (vitest) plus `tsc --noEmit`, and the firmware host contract test.
+Current suites (2026-10-18, all green): **hub 129** (pytest), **agent 41** (pytest), **handpose 24** (pytest), **sim 98** in 16 files (vitest) plus `tsc --noEmit`, and the firmware host contract test.
 
 ```bash
 cd hub && uv run pytest        # 87
@@ -1945,14 +1985,14 @@ g++ -std=c++17 -I firmware/glove/src firmware/glove/test/host_protocol_test.cpp 
 |---|---|---|
 | Glove protocol | Encode/decode round trip, CRC known-answer vectors, resync after garbage bytes and split reads, bad CRC, truncated packets, STATUS/PONG decoding (`test_glove_protocol.py`). C++ side: `host_protocol_test.cpp` parses a vectors file (`<type> <count> <stream_hex>` per line) emitted by the Python codec; the file isn't in the repo, so generate it before running. | pytest + g++ |
 | ESPcmd transport | Command ≤ 20 bytes; newest frame without backlog; unchanged frames not resent; stop sent immediately; disconnect noticed (`test_glove_espcmd.py`) | pytest |
-| Haptic engine | Clamp 0..1; soft-sum composition; alert ducking; pattern timing; profile gains; perceptual curve endpoints; seeded determinism; **drill hard/soft contrast**; drill silent unless active; stall alert once per episode; localized mapping; rover rumble monotonic in speed; split mapping by wheel side; slope alert from LOLA with re-arm; impact side; snapshot shape (`test_haptics.py`) | pytest |
+| Haptic engine | Clamp 0..1; soft-sum composition; perceptual curve (endpoints, equal-ratio steps, quieter than the old curve); **thermal budget** (untouched ≤ 180, pre-paid 60 ms accents, refused when saturated, rolling 0.5 s mean ≤ 180 under adversarial requests and any ≤ 5-tick hold or 2:1 decimation, engine stress test); alert hush, ducking and release; event ducking; stall beats separated by silence; pattern timing and lengths; accents only on events/alerts and ≤ 60 ms; **distinctness** (every pair of meanings differs on a strong axis, same-context one-shots on two, the alerts on three; UI signatures; textures differ in texture, not only level); drill situations (silent, free spin incl. `through`, soft, hard, spread, **hard/soft contrast**, stall only while feeding, short stall no alert, breakthrough only on the drill); localized mapping; sensitivity; rover rumble monotonic and wide, quickening; silent when stopped or not active; taps denser and stronger with roughness and standing out over the full-speed rumble; split mapping by wheel side; slope alert from LOLA with re-arm and siren shape; impact side and only on the rover; pattern names used by profiles and the voice tool; snapshot shape (`test_haptics.py`) | pytest |
 | Command handler | Every tool × valid/invalid args; unauthorized use; no profile; clamping and equipment correction; persistence; status keys incl. `broken_through` | pytest |
 | Profile store and mission state | UID normalisation and lookup, enrollment (persisted, moves a tag between profiles, rejects unknown profiles), setting bounds, NFC flow table from §6.2, switching astronaut clears authorizations | pytest |
 | Hub integration | Start the app with the `null` glove; scan → drill → haptics end to end; unknown tag enrolled at the drill authorizes it; voice tool-call round trip; assistant local fallback; tracker relay; agent vocabulary in sync; **forced quit still turns the motors off** (`test_app.py`) | pytest + FastAPI TestClient |
 | xAI clients and offline intents | Token normalisation and minting; patch prompt sanitising, PNG normalising, b64/url paths, error and fallback/cache; local intents parse and target real tools | pytest (mocked `httpx`) |
 | Drill press (sim) | `drillPress.ts` (16): home state, free feed and spin-up, hold, contact at the top face, regolith breaks through in 10–15 s then reloads once raised, resting in the bore isn't a stall, basalt barely advances and stalls only while pushing, retract and spin-down, table lock with the bit down, end-stop slide, clearance while the table moves, bores kept per sample, Q refused with the bit down, silent telemetry when nobody operates; `feedCommand` (fist lowers, open raises, keys override) | vitest |
 | Rover (sim) | Physics: static sag, top speed and heading, slows on a real grade, stable 60 s on rough terrain with roughness and impacts. `roverControls.ts` (7): open hand ramps throttle, fist brakes and never reverses, neutral coasts, re-open ramps from zero, lost tracking coasts, steering from keys only, W/S override | vitest |
-| Hand and gestures (sim) | One Euro filter; finger curl; grip hysteresis; open hand needs 150 ms; pose fist/open/neutral with the thumb ignored; palm roll; glove-limited fist grips only with the wearer's calibration; handedness filter; hand placement and keep-out boxes; EVA glove geometry, fist and motor-lit fingertips | vitest |
+| Hand and gestures (sim) | One Euro filter; finger curl; grip hysteresis; open hand needs 100 ms; pose fist/open/neutral with the thumb and one bent finger ignored; palm roll; glove-limited fist grips only with the wearer's calibration; handedness filter; hand placement and keep-out boxes; EVA glove geometry, fist and motor-lit fingertips | vitest |
 | World and graphics (sim) | Clipmap (snapping, indices, cut-out under the child, matches the physics height within cm, crack-free edges); synthetic detail (bucketed lookup = brute force, deterministic, power-law craters with a clear work site, crater profile); rocks; pebble scatter; regolith cells; procedural noise and bakes; sky directions, galactic frame, star catalogue statistics, shadow texel snapping | vitest |
 | Tracker engines (sim) | Engine button order phone → laptop's model → other model → phone; saved-choice migration (`laptop` → WiLoR) | vitest |
 | Laptop hand tracker | Landmark projection and handedness (`test_frames.py`); MANO chumpy stripping incl. chumpy `Select` (`test_mano.py`); HaMeR config patching, checkpoint paths, CLI and `HAND_MODEL` (`test_models.py`); server round trip, newest-frame-only, model switch frees the other first, `--keep-models`, frames dropped while loading, failed load reported and the previous model restored (`test_server.py`). Uses fakes: no GPU, weights or MANO needed. | pytest |
@@ -1961,7 +2001,7 @@ g++ -std=c++17 -I firmware/glove/src firmware/glove/test/host_protocol_test.cpp 
 | Mission Assistant (unit) | Every rubric situation has a case; derive + baseline per situation (incl. breakthrough held by `through`); left/right/both terrain; uncertainty when interpolated; grounding catches invented numbers; safety catches unsafe advice, **hand-control wording** and hazard downgrades; repair loop; guard; non-JSON and model failure fall back to rules; prompts never leak labels; ablations remove data; scorers | pytest (agent) |
 | Mission Assistant (evals) | §10B.6 suite: 4 datasets, 12 scorers, 7 experiments, ship gates. Only `baseline-rules` has run, on pre-press data. | local runner / Chalk Evaluations |
 | Firmware | Manual bring-up checklist §5.4, plus the watchdog test (kill the hub → motors off < 300 ms). With the ESPcmd sketch there is no watchdog: check that disconnect and hub shutdown stop the motors. | human + haptic_cli |
-| Human perception | `haptic_abx.py`: 20 random trials across {soft, hard, rover slow, rover rough, warning}, results to `data/abx_results.csv`. **Target ≥ 85 % correct** on 3+ people. Tune if lower. Record results for the pitch. Not run yet; needs the binary firmware. | human |
+| Human perception | `haptic_abx.py`: 20 random trials from a set (`--set core`: soft, hard, rover slow, rover rough left, stall alert, slope alert; also `drill`, `rover`, `alerts`, `ui`), results to `data/abx_results.csv`. **Target ≥ 85 % correct** on 3+ people. Tune if lower. Record results for the pitch. Not run yet; runs on the binary firmware or, with `--espcmd`, on the ESPcmd sketch. | human |
 | End-to-end latency | `PING`/`PONG` RTT shown in the HUD (target < 40 ms over BLE; ESPcmd reports the write round trip). Phone tracker capture→render measured with timestamps (target < 150 ms). | in-app |
 | Rendering cost | `window.__lh.stats()` (dev builds only): last frame's draw calls and triangles over every pass, texture/geometry/program counts, CPU frame time, startup breakdown per stage and per baked texture. No real-GPU frame timing yet (§16). | in-app (dev) |
 
@@ -2094,10 +2134,10 @@ Still open:
 | BLE drops in a crowded 2.4 GHz hall | Med | High | Watchdog (motors off, safe); reconnect loop; short connection interval; one packet per write. ESPcmd: latest-duty writer, motors off on disconnect | Unstable at Sat 1 AM → tethered USB serial |
 | ESPcmd link has no firmware watchdog: a hub that hangs while connected leaves the last vibration running | Med (while on ESPcmd) | Med | Hub sends STOP first on any shutdown, second Ctrl+C or SIGHUP; sketch stops on disconnect | Flash `firmware/glove` and use `--glove ble`; or power-cycle the glove |
 | ESP32 brownout resets under motor load | Med | High | Bulk capacitor; cap `max_duty`; separate rail from the bank | Uptime counter resets → lower `max_duty` and kick duty |
-| Patterns feel the same | Med | High | Rhythm + spatial groups, not pitch; ABX testing (needs binary firmware); per-motor dead-zone calibration | ABX < 85 % → widen contrast (hard = bursts only, soft = steady only) |
+| Patterns feel the same | Med | High | Rhythm + spatial groups + envelope, not pitch; perceptual duty curve; distinctness unit tests (§7.5); ABX testing (binary firmware or `--espcmd`); per-motor dead-zone calibration | ABX < 85 % → widen contrast further (mapper levels §7.3–7.4, duck depth §7.1) |
 | Venue Wi-Fi blocks phone↔laptop | High | Med | Decide on a hotspot in Phase 0 | Phone hotspot, laptop joins |
 | No xAI key/credits, or API down at judging | Low–Med | High (requirement) | Key in hand; record a working voice clip in the backup video; offline local intents | Live failure → play the recorded clip, show logs |
-| Hand poses unreliable through the suit glove (curl limited, thumb barely moves; MediaPipe loses gloved hands, especially head-mounted looking down) | Med–High | Med | Laptop WiLoR/HaMeR models; `K` calibration per astronaut (fist = calibrated, glove-limited); open-hand pose ignores the thumb and needs 150 ms; One Euro filter; hysteresis; fist must open once before it feeds the press; lost tracking coasts the rover, a fist never reverses; W/S and Space always override | Poses flicker → keyboard for feeding and throttle, hand still rendered |
+| Hand poses unreliable through the suit glove (curl limited, thumb barely moves; MediaPipe loses gloved hands, especially head-mounted looking down) | Med–High | Med | Laptop WiLoR/HaMeR models; `K` calibration per astronaut (fist = calibrated, glove-limited); open-hand pose ignores the thumb and the most curled finger and needs 100 ms; One Euro filter; hysteresis; fist must open once before it feeds the press; lost tracking coasts the rover, a fist never reverses; W/S and Space always override | Poses flicker → keyboard for feeding and throttle, hand still rendered |
 | Laptop tracker and sim compete for the 8 GB laptop GPU (if Chrome renders on it) | Med | Med | One model loaded at a time (about 3 GB; 5.6 GB with `--keep-models`); `P` to gfx low (no AO; 2× MSAA, 2048² shadows) or off (also no bloom); tracker falls back to the phone model when the server is down | Sim frame rate or tracker fps drops → gfx low, then phone MediaPipe |
 | No real-GPU frame timing for the sim: only SwiftShader screenshots and `__lh.stats()` counts (about 1.7–2.1 M triangles, 200–340 draw calls at gfx high) | High (unknown) | Med | Measure on the demo laptop early (§18); `P` cycles high/low/off; `?gfx=low` | < 30 fps at high → ship with low |
 | Startup slower than before (about 3.2 s to first frame in SwiftShader: texture bakes on the main thread plus shader precompile behind the loading screen) | Low | Low | Load the tab before judging; no mid-session shader stalls since precompile | — |
@@ -2128,14 +2168,14 @@ Set-up before judging: `scripts/dev.sh --glove espcmd --nfc auto --assistant cha
 |---|---|---|---|
 | 0:00 | 1. Suit up | Puts on the glove and head-mounted phone and holds up a hand | The EVA glove appears in first person over the Shackleton rim. Provenance panel: "NASA LOLA 5 m/px". HUD tracker light shows fps and the engine (e.g. "· HaMeR"). |
 | 0:15 | 2. Press auth | Walks (`W`, mouse) to the drill press; HUD "Tap glove to identify (N) · DRILL"; taps the reader | **Grok Imagine mission patch splash** "Welcome, Cmdr. Ana Rivera"; double pulse plus the drill signature (visible on the motor bars); toast "drill profile loaded" |
-| 0:25 | 3. Materials | Closes a fist to take the controls (or `E`); opens the hand once, then closes it on the Regolith brick | The quill lowers, the spindle spins up; gentle steady hum; dust; the HUD readout shows the bore deepening |
-| 0:40 | | Opens the hand (bit rises clear), presses `D` (Basalt core slides under the bit), closes the fist again | Strong gritty bursts, sparks, the depth barely moves; after about 3 s the stall warning (3 strong beats). **Mission Assistant card:** "You're feeling three strong beats: the bit has stalled in hard basalt. Open your hand to raise the bit." |
+| 0:25 | 3. Materials | Closes a fist to take the controls (or `E`); opens the hand once, then closes it on the Regolith brick | The quill lowers, the spindle spins up; a gentle, slowly throbbing hum; dust; the HUD readout shows the bore deepening |
+| 0:40 | | Opens the hand (bit rises clear), presses `D` (Basalt core slides under the bit), closes the fist again | Strong gritty jolts, sparks, the depth barely moves; after about 3 s a brief silence, then the stall warning (3 heavy beats in the grip fingers). **Mission Assistant card:** "You're feeling three heavy beats: the bit has stalled in hard basalt. Open your hand to raise the bit." |
 | 1:00 | | Opens the hand; `E` to step away | Bit retracts, spindle spins down |
-| 1:05 | 4. Switch | Walks to the rover and taps the reader; fist (or `E`) to board | Rover signature (left→right sweep); "rover profile loaded" |
+| 1:05 | 4. Switch | Walks to the rover and taps the reader; fist (or `E`) to board | Rover signature (two swells on both edges of the hand); "rover profile loaded" |
 | 1:15 | 5. Real terrain | Open hand to drive (the speedo shows "accelerate"), `A`/`D` to steer, fist to brake; `C` for the cockpit; `F` toggles synthetic detail | Feel follows speed and terrain; the left/right split matches the wheels; with `F` off the ride goes smooth ("NASA LOLA only"); climbing a real LOLA slope above Rivera's 15° limit fires the slope warning, and the HUD shows the slope ± error (LOLA) |
 | 1:55 | 6. Grok | Holds `V`: "CAPCOM, how rough is the terrain ahead?" | Spoken: "Max slope ahead is about 14 degrees per LOLA; moderate roughness." |
-| 2:05 | | Slope warning fires; fist to stop; holds `V`: "Why is my glove beating like that?" | CAPCOM calls `ask_mission_assistant` and speaks: "That's the slope warning. LOLA measures 17 degrees here, above your 15-degree limit. Close your fist to stop, then turn across the slope." The assistant card shows the cited LOLA chips. |
-| 2:20 | | Holds `V`: "Increase my terrain feedback" | Confirmation ripple; "Terrain sensitivity raised to 1.25"; noticeably stronger texture |
+| 2:05 | | Slope warning fires (silence, then the left-right siren); fist to stop; holds `V`: "Why is my glove beating like that?" | CAPCOM calls `ask_mission_assistant` and speaks: "That's the slope warning. LOLA measures 17 degrees here, above your 15-degree limit. Close your fist to stop, then turn across the slope." The assistant card shows the cited LOLA chips. |
+| 2:20 | | Holds `V`: "Increase my terrain feedback" | A ripple thumb→pinky that grows; "Terrain sensitivity raised to 1.25"; noticeably stronger texture |
 | 2:35 | 7. Close | Shows the EVALS slide or the Chalk dashboard for 10 s | Only real numbers from a run on regenerated data (§10B.6): sensation accuracy, safety at 100 %, the no-NASA-data ablation. Tagline: "One glove. Every tool. Feel the Moon." |
 
 The assistant and CAPCOM lines in scenes 3 and 6 are examples; the real wording comes from the rubric (§10B.5) and the live data. Everything works without the hand: `Space`/`S` lowers the bit and `W` raises it, `W`/`S` drive and brake. Keep `F` and `P` for the Q&A ("is the terrain real?", "what does it cost to render?").
@@ -2154,9 +2194,9 @@ The assistant and CAPCOM lines in scenes 3 and 6 are examples; the real wording 
 
 **Real-hardware validation (needs the team):**
 1. **Sim on the demo laptop's GPU:** frame rate at gfx `high`/`low`, alone and with WiLoR or HaMeR loaded; read `__lh.stats()` and note startup time. Pick the default quality.
-2. **Tracker with the real suit glove:** phone vs WiLoR vs HaMeR under venue-like light; `K` calibration per astronaut; check fist/open detection at the press and the rover's open-hand throttle (thumb ignored, 150 ms open hold).
+2. **Tracker with the real suit glove:** phone vs WiLoR vs HaMeR under venue-like light; `K` calibration per astronaut; check fist/open detection at the press and the rover's open-hand throttle (thumb and one bent finger ignored, 100 ms open hold).
 3. **Glove firmware:** flash `firmware/glove`, run `haptic_cli.py` patterns, dead-zone `calibrate` and the 10-minute `soak`, then switch to `--glove ble`. Otherwise keep `espcmd` and check that disconnect and hub shutdown stop the motors.
-4. **ABX test** on 3+ people (`haptic_abx.py`, binary firmware); tune until ≥ 85 %.
+4. **ABX test** on 3+ people (`haptic_abx.py`, binary firmware or `--espcmd`; at least `--set core` and `--set alerts`); tune until ≥ 85 %.
 5. **Grok Voice end to end** on the venue network: PTT, tool calls, `ask_mission_assistant`, `adjust_haptics`.
 6. **Chalk:** deploy `mission_assistant`, smoke test, run the hub with `--assistant chalk`, measure latency.
 7. **NFC:** enroll the crewmate tag to Okafor (tap, `Shift+N`).

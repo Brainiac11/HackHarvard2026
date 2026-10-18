@@ -151,6 +151,7 @@ export class GrokVoice {
       if (this.held) await this.mic.setActive(true);
     } catch (e) {
       this.turn = "idle";
+      this.mic.release();
       const err = e as Error;
       this.set(this.status, `microphone ${MIC_HINTS[err.name] ?? (err.message || String(err))}`);
       this.onTranscript("tool", `microphone unavailable: ${err.name}: ${err.message}`);
@@ -158,6 +159,7 @@ export class GrokVoice {
     }
     if (!this.held) { // V came up while the mic was opening (the first press waits on the permission prompt)
       this.turn = "idle";
+      this.mic.release();
       this.set(this.status, "mic on: hold V while you talk");
       return;
     }
@@ -172,7 +174,7 @@ export class GrokVoice {
     this.send({ type: "input_audio_buffer.clear" });
     for (const audio of this.early.splice(0)) this.send({ type: "input_audio_buffer.append", audio });
     this.turn = "live";
-    this.set("listening");
+    this.set("listening", this.mic.label || undefined); // the input in use: it follows the system default
     if (!this.held) await this.endTurn(); // V came up while the session was still connecting
   }
 

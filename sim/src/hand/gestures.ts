@@ -75,11 +75,13 @@ export function hysteresis(prev: boolean, value: number, on: number, off: number
 /** The hand as a two-way control: closed fist, open hand, or neither (in between, or changing). */
 export type HandPose = "fist" | "open" | "neutral";
 
-// Open hand: index..pinky all straighter than OPEN_ON for OPEN_HOLD_S; it stays open until one passes OPEN_OFF.
-// The thumb is ignored: a suit glove barely lets it move, and the trackers place it least reliably. OPEN_ON is
-// lenient because a relaxed gloved hand never quite flattens; it still sits below the grip's 0.45 release, so a hand
-// between the two is neutral.
-const OPEN_ON = 0.35, OPEN_OFF = 0.5, OPEN_HOLD_S = 0.15;
+// Fist: mean curl of middle, ring and pinky above GRIP_ON; it holds until the mean drops below GRIP_OFF.
+const GRIP_ON = 0.65, GRIP_OFF = 0.5;
+// Open hand: the three straightest of index..pinky below OPEN_ON for OPEN_HOLD_S; it stays open until they pass
+// OPEN_OFF. The most curled finger is ignored (a suit glove keeps one bent, usually the pinky, and the trackers lose
+// it first), and so is the thumb, which the glove barely lets move. OPEN_ON sits below GRIP_OFF, so a hand relaxed
+// part way out of a fist is neutral (hold the press, coast the rover) rather than open.
+const OPEN_ON = 0.4, OPEN_OFF = 0.55, OPEN_HOLD_S = 0.1;
 
 export interface Gestures { grip: boolean; openPalm: boolean; pose: HandPose; closure: number }
 
@@ -91,9 +93,10 @@ export class GestureState {
 
   update(curls: number[], t: number): Gestures {
     const gripValue = (curls[2] + curls[3] + curls[4]) / 3;
-    this.grip = hysteresis(this.grip, gripValue, 0.65, 0.45);
+    this.grip = hysteresis(this.grip, gripValue, GRIP_ON, GRIP_OFF);
     const fingers = curls.slice(1);
-    const straight = Math.max(...fingers) < (this.openPalm ? OPEN_OFF : OPEN_ON);
+    const threeStraightest = [...fingers].sort((a, b) => a - b)[2]; // the most curled of the other three
+    const straight = threeStraightest < (this.openPalm ? OPEN_OFF : OPEN_ON);
     if (!straight || this.grip) this.openSince = -1;
     else if (this.openSince < 0) this.openSince = t;
     this.openPalm = this.openSince >= 0 && t - this.openSince >= OPEN_HOLD_S;

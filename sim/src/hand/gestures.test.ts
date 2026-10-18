@@ -52,16 +52,16 @@ describe("gestures", () => {
     const g = new GestureState();
     expect(g.update(normalizedCurls(POINT), 0)).toMatchObject({ grip: true, pose: "fist" });
     expect(g.update(normalizedCurls(FIST), 0.1)).toMatchObject({ grip: true, pose: "fist" });
-    // partially relaxed fist stays gripped (hysteresis)
-    const relaxed = normalizedCurls(hand([0.3, 0.6, 0.55, 0.55, 0.55]));
+    // partially relaxed fist stays gripped (hysteresis: mean ~0.55, between the 0.5 release and the 0.65 grip)
+    const relaxed = normalizedCurls(hand([0.3, 0.62, 0.62, 0.62, 0.62]));
     expect(g.update(relaxed, 0.2).grip).toBe(true);
     expect(g.update(normalizedCurls(OPEN), 0.3).grip).toBe(false);
   });
-  it("open hand needs 150 ms", () => {
+  it("open hand needs 100 ms", () => {
     const g = new GestureState();
     expect(g.update(normalizedCurls(OPEN), 0).openPalm).toBe(false);
-    expect(g.update(normalizedCurls(OPEN), 0.1).pose).toBe("neutral");
-    expect(g.update(normalizedCurls(OPEN), 0.2)).toMatchObject({ openPalm: true, pose: "open" });
+    expect(g.update(normalizedCurls(OPEN), 0.05).pose).toBe("neutral");
+    expect(g.update(normalizedCurls(OPEN), 0.12)).toMatchObject({ openPalm: true, pose: "open" });
   });
   it("pose: fist, open or neutral, with hysteresis and the thumb ignored", () => {
     const g = new GestureState();
@@ -82,6 +82,16 @@ describe("gestures", () => {
     const g = new GestureState();
     g.update(relaxed, 0);
     expect(g.update(relaxed, 0.2)).toMatchObject({ pose: "open", openPalm: true });
+  });
+  it("one finger the glove keeps bent doesn't block an open hand; two do", () => {
+    const g = new GestureState();
+    const stiffPinky = normalizedCurls(hand([0.3, 0, 0, 0, 0.9]));
+    g.update(stiffPinky, 0);
+    expect(g.update(stiffPinky, 0.2)).toMatchObject({ pose: "open", grip: false });
+    const h = new GestureState();
+    const twoBent = normalizedCurls(hand([0.3, 0, 0, 0.9, 0.9]));
+    h.update(twoBent, 0);
+    expect(h.update(twoBent, 0.2).pose).toBe("neutral");
   });
   it("palm roll tracks rotation", () => {
     expect(Math.abs(palmRollDeg(OPEN, "Right"))).toBeLessThan(1);

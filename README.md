@@ -92,6 +92,32 @@ down to the sample, then only as fast as the material allows: the brick breaks t
 barely advances, and pushing on raises the stall warning. After a breakthrough, raise the bit and a fresh sample loads.
 The table only moves with the bit raised clear of the samples. The panel LCD shows bore depth, spindle speed and load.
 
+### What the glove feels like
+
+Each sensation differs from the others in rhythm, place on the hand, envelope or texture, not just in strength.
+Quiet states sit just above each motor's dead zone and strong ones near the 180/255 duty ceiling. Duty follows a
+perceptual curve, so equal steps feel equal. Events and alerts start from a short silence and land with a brief
+overdriven accent: up to 230 for at most 60 ms, inside a thermal budget that keeps every motor's 0.5 s average at or
+below 180.
+
+| You feel | It means |
+|---|---|
+| A faint, smooth hum | Drill spindle running, the bit is not touching anything |
+| A gentle hum with a slow, even throb | Cutting soft regolith |
+| Strong, gritty, irregular jolts | Grinding hard basalt |
+| Silence, then three heavy beats in the index, middle and ring fingers | **Drill stall**: open your hand to raise the bit |
+| A punch in the middle finger that spreads across the hand and fades | The bit broke through the sample |
+| A rumble that grows stronger and throbs faster | Rover speed |
+| Random taps on the thumb side or the pinky side, denser on rougher ground | Left or right wheels on rough ground |
+| One hard hit on one side that dies away | A wheel struck a rock or a crater edge |
+| Silence, then a siren: thumb side and pinky side take turns, faster and stronger | **Slope warning**: NASA's measured slope under the rover exceeds your limit |
+| Two crisp pulses, three quick pulses, or a wave across the fingers and back | Your glove was recognised (your profile's pattern) |
+| A swell then a tap in the index and middle fingers · two swells on both edges of the hand | Drill press · rover profile active |
+| One tap on the middle finger · a ripple thumb→pinky (stronger) or pinky→thumb (fading) | Command accepted · a setting went up or down |
+| A low, rough, stuttering buzz | Not authorized, or the glove was not recognised |
+
+Details and numbers are in PLAN.md §7. To try one on the glove, run `haptic_cli.py ... play <name>` (see Hardware bring-up).
+
 ### Laptop hand tracking (WiLoR, HaMeR)
 
 MediaPipe on the phone struggles with the gloved hand. The tracker can instead stream frames to a model on the laptop
@@ -143,6 +169,8 @@ uv run --project hub python scripts/haptic_cli.py --serial /dev/ttyUSB0 pattern 
 uv run --project hub python scripts/haptic_cli.py --serial /dev/ttyUSB0 calibrate     # per-motor dead zone
 uv run --project hub python scripts/haptic_cli.py --ble soak 600                      # 10-min BLE soak
 uv run --project hub python scripts/haptic_abx.py --serial /dev/ttyUSB0 --name alex   # can people tell them apart?
+uv run --project hub python scripts/haptic_cli.py --espcmd play slope                 # any hub pattern (ESPcmd sketch too)
+uv run --project hub python scripts/haptic_abx.py --espcmd --name alex --set alerts   # ABX sets: core drill rover alerts ui
 ```
 
 Linux prep: `sudo usermod -aG dialout $USER`, `sudo apt remove brltty`, and for PC/SC NFC readers

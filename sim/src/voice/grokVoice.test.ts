@@ -8,8 +8,11 @@ vi.mock("./audio", () => ({
     onChunk: (b64: string, peak: number) => void = () => {};
     opening: Promise<void> = Promise.resolve();
     active: boolean[] = [];
+    released = 0;
+    label = "";
     async start() { return this.opening; }
     async setActive(on: boolean) { this.active.push(on); }
+    release() { this.released++; }
   },
   PcmPlayer: class {
     played: string[] = [];
@@ -218,6 +221,7 @@ describe("grok voice failures end on a status that says what broke", () => {
     expect(last()).toMatch(/microphone blocked: allow it for this site/);
     expect(transcript.at(-1)).toBe("tool: microphone unavailable: NotAllowedError: Permission denied");
     expect(FakeWS.all).toHaveLength(0);
+    expect(mic.released).toBe(1);
   });
 
   it("V released while the mic was still opening says to hold it, and the next press works", async () => {
@@ -229,8 +233,16 @@ describe("grok voice failures end on a status that says what broke", () => {
     grant();
     await down;
     expect(last()).toBe("offline (mic on: hold V while you talk)");
+    expect(mic.released).toBe(1); // the input opened after the release is let go, not left recording
     await talk(voice);
     expect(voice.status).toBe("listening");
+  });
+
+  it("the listening status names the input in use", async () => {
+    const { voice, mic, last } = setup();
+    mic.label = "Headset Microphone";
+    await talk(voice);
+    expect(last()).toBe("listening (Headset Microphone)");
   });
 });
 
