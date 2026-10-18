@@ -29,3 +29,5 @@ data/sessions/*.jsonl
 
 # AnyHand / WiLoR checkout, weights and MANO (CC-BY-NC-ND + MANO licence: not redistributed; scripts/setup_anyhand.sh)
 third_party/
+
+*.mp4
